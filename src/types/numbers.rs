@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::config::DEFAULT_COUNTRY;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -144,12 +145,12 @@ impl Default for WaitCodeOptions {
     }
 }
 
-/// Parameters for ordering a number (defaults match the JS SDK).
+/// Parameters for ordering a number.
 #[derive(Debug, Clone)]
 pub struct GetNumberParams<'a> {
     /// Service slug (required).
     pub service: &'a str,
-    /// Country dial code (default `7`).
+    /// Country dial code (default [`DEFAULT_COUNTRY`]).
     pub country: i64,
     /// Rejected number ids.
     pub reject: &'a [i64],
@@ -158,11 +159,11 @@ pub struct GetNumberParams<'a> {
 }
 
 impl<'a> GetNumberParams<'a> {
-    /// Create params with JS defaults (`country=7`, empty reject, `extension=false`).
+    /// Create params with defaults (`country` = [`DEFAULT_COUNTRY`], empty reject, `extension=false`).
     pub fn new(service: &'a str) -> Self {
         Self {
             service,
-            country: 7,
+            country: DEFAULT_COUNTRY,
             reject: &[],
             extension: false,
         }

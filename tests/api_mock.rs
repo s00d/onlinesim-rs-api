@@ -12,7 +12,7 @@
 #![cfg(feature = "mock")]
 
 use onlinesim_rs_api::mock::{MockOnlineSim, SmsScript};
-use onlinesim_rs_api::WaitCodeOptions;
+use onlinesim_rs_api::{WaitCodeOptions, DEFAULT_COUNTRY};
 
 #[tokio::test]
 async fn balance_and_profile() {
@@ -51,8 +51,8 @@ async fn sms_flow_wait_code() {
     let mock = MockOnlineSim::start().await;
     mock.script_sms(SmsScript {
         service: "telegram".into(),
-        number: "+79001234567".into(),
-        country: 7,
+        number: "+19001234567".into(),
+        country: DEFAULT_COUNTRY,
         code: "654321".into(),
         polls_before_code: 1,
         price: "12".into(),
@@ -62,8 +62,8 @@ async fn sms_flow_wait_code() {
     assert_eq!(client.numbers().price("telegram").await.unwrap(), "12");
 
     let ordered = client.numbers().get_with_number("telegram").await.unwrap();
-    assert_eq!(ordered.number, "+79001234567");
-    assert_eq!(ordered.country, 7);
+    assert_eq!(ordered.number, "+19001234567");
+    assert_eq!(ordered.country, DEFAULT_COUNTRY);
     assert_eq!(ordered.service.as_deref(), Some("telegram"));
 
     // First poll is still waiting (polls_before_code = 1).
@@ -105,9 +105,9 @@ async fn free_and_rent() {
     let client = mock.client().unwrap();
 
     let countries = client.free().countries().await.unwrap();
-    assert_eq!(countries[0].country, 7);
+    assert_eq!(countries[0].country, DEFAULT_COUNTRY);
 
-    let numbers = client.free().numbers(7).await.unwrap();
+    let numbers = client.free().numbers(DEFAULT_COUNTRY).await.unwrap();
     assert!(!numbers.is_empty());
 
     let messages = client.free().messages(9001234567).await.unwrap();
@@ -123,8 +123,16 @@ async fn free_and_rent() {
 async fn tariffs() {
     let mock = MockOnlineSim::start().await;
     let client = mock.client().unwrap();
-    assert!(client.numbers().tariffs().await.unwrap().contains_key("7"));
-    assert_eq!(client.numbers().tariffs_one().await.unwrap().code, 7);
+    assert!(client
+        .numbers()
+        .tariffs()
+        .await
+        .unwrap()
+        .contains_key(&DEFAULT_COUNTRY.to_string()));
+    assert_eq!(
+        client.numbers().tariffs_one().await.unwrap().code,
+        DEFAULT_COUNTRY
+    );
 }
 
 #[test]

@@ -24,8 +24,8 @@
 //! let mock = MockOnlineSim::start().await;
 //! mock.script_sms(SmsScript {
 //!     service: "telegram".into(),
-//!     number: "+79001234567".into(),
-//!     country: 7,
+//!     number: "+19001234567".into(),
+//!     country: 1,
 //!     code: "123456".into(),
 //!     polls_before_code: 1,
 //!     ..SmsScript::default()
@@ -58,6 +58,7 @@ use serde_json::{json, Value};
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+use crate::config::DEFAULT_COUNTRY;
 use crate::error::Result;
 use crate::Client;
 
@@ -82,8 +83,8 @@ impl Default for SmsScript {
     fn default() -> Self {
         Self {
             service: "telegram".into(),
-            number: "+79001234567".into(),
-            country: 7,
+            number: "+19001234567".into(),
+            country: DEFAULT_COUNTRY,
             code: "123456".into(),
             polls_before_code: 0,
             price: "10".into(),
@@ -423,14 +424,18 @@ fn handle_next(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) -
 }
 
 fn handle_tariffs(query: &HashMap<String, String>) -> Value {
-    let country = query.get("country").map(String::as_str).unwrap_or("7");
+    let country = query
+        .get("country")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_COUNTRY.to_string());
+    let code: i64 = country.parse().unwrap_or(DEFAULT_COUNTRY);
     let one = json!({
-        "name": "Russia",
+        "name": "USA",
         "position": 1,
-        "code": 7,
+        "code": code,
         "new": false,
         "enabled": true,
-        "locale_name": "Russia",
+        "locale_name": "USA",
         "services": {
             "telegram": {
                 "count": 100,
@@ -443,7 +448,10 @@ fn handle_tariffs(query: &HashMap<String, String>) -> Value {
         }
     });
     if country == "all" {
-        json!({ "response": "1", "7": one })
+        let mut map = serde_json::Map::new();
+        map.insert("response".into(), json!("1"));
+        map.insert(DEFAULT_COUNTRY.to_string(), one);
+        Value::Object(map)
     } else {
         let mut body = one;
         if let Some(obj) = body.as_object_mut() {
@@ -484,7 +492,7 @@ fn handle_free_countries() -> Value {
     json!({
         "response": 1,
         "countries": [
-            { "country": 7, "country_text": "Russia", "country_original": "Russia" }
+            { "country": DEFAULT_COUNTRY, "country_text": "USA", "country_original": "USA" }
         ]
     })
 }
@@ -493,7 +501,7 @@ fn handle_free_numbers(query: &HashMap<String, String>) -> Value {
     let country: i64 = query
         .get("country")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(7);
+        .unwrap_or(DEFAULT_COUNTRY);
     json!({
         "response": "1",
         "numbers": [
@@ -530,12 +538,12 @@ fn handle_free_messages() -> Value {
 fn handle_free_list() -> Value {
     json!({
         "response": 1,
-        "countries": [{ "country": 7, "country_text": "Russia" }],
+        "countries": [{ "country": DEFAULT_COUNTRY, "country_text": "USA" }],
         "numbers": {
             "9001234567": {
-                "country": 7,
-                "country_original": "Russia",
-                "full_number": "+79001234567",
+                "country": DEFAULT_COUNTRY,
+                "country_original": "USA",
+                "full_number": "+19001234567",
                 "is_archive": false
             }
         },
@@ -543,7 +551,7 @@ fn handle_free_list() -> Value {
             "current_page": 1,
             "data": [],
             "number": "9001234567",
-            "country": 7
+            "country": DEFAULT_COUNTRY
         }
     })
 }
@@ -553,7 +561,7 @@ fn handle_rent_get(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String
     let country: i64 = query
         .get("country")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(7);
+        .unwrap_or(DEFAULT_COUNTRY);
     let tzid = g.next_tzid;
     g.next_tzid += 1;
     g.ops.insert(
@@ -620,9 +628,9 @@ fn handle_rent_state(state: &Arc<Mutex<MockState>>, query: &HashMap<String, Stri
 
 fn handle_rent_tariffs(query: &HashMap<String, String>) -> Value {
     let one = json!({
-        "code": 7,
+        "code": DEFAULT_COUNTRY,
         "enabled": true,
-        "name": "Russia",
+        "name": "USA",
         "new": false,
         "position": 1,
         "count": { "1": 10.0 },
@@ -636,6 +644,9 @@ fn handle_rent_tariffs(query: &HashMap<String, String>) -> Value {
         }
         body
     } else {
-        json!({ "response": "1", "7": one })
+        let mut map = serde_json::Map::new();
+        map.insert("response".into(), json!("1"));
+        map.insert(DEFAULT_COUNTRY.to_string(), one);
+        Value::Object(map)
     }
 }

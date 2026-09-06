@@ -64,7 +64,7 @@ pub mod mock;
 pub mod types;
 
 pub use builder::ClientBuilder;
-pub use config::{Config, DEFAULT_BASE_URL};
+pub use config::{Config, DEFAULT_BASE_URL, DEFAULT_COUNTRY};
 pub use error::{request_error_message, Error, Result};
 pub use types::numbers::{GetNumberParams, WaitCodeOptions};
 

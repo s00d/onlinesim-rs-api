@@ -15,7 +15,7 @@ async fn main() -> onlinesim_rs_api::Result<()> {
     let country: i64 = std::env::var("COUNTRY")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(7);
+        .unwrap_or(1);
 
     let client = Client::new(apikey)?;
     let ordered = client

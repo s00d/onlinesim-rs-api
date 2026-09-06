@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::config::DEFAULT_COUNTRY;
 use crate::error::{Error, Result};
 use crate::types::numbers::{
     GetNumberParams, NumberWithTz, StateOne, TariffCountryOne, WaitCodeOptions,
@@ -59,9 +60,9 @@ struct ServiceNumberResp {
 }
 
 impl NumbersApi {
-    /// Get price for a service (country default `7`).
+    /// Get price for a service (country default [`DEFAULT_COUNTRY`]).
     pub fn price(&self, service: &str) -> Result<String> {
-        self.price_in(service, 7)
+        self.price_in(service, DEFAULT_COUNTRY)
     }
 
     /// Get price for a service in a country.
@@ -78,7 +79,7 @@ impl NumbersApi {
         }
     }
 
-    /// Order a number with JS defaults.
+    /// Order a number with default country.
     pub fn get(&self, service: &str) -> Result<i64> {
         self.get_with(GetNumberParams::new(service))
     }
@@ -156,7 +157,7 @@ impl NumbersApi {
         )
     }
 
-    /// State for a single `tzid` with JS defaults.
+    /// State for a single `tzid` with default flags.
     pub fn state_one(&self, tzid: i64) -> Result<StateOne> {
         self.state_one_with(tzid, 1, true, true, false)
     }
@@ -226,9 +227,9 @@ impl NumbersApi {
             .get_onlinesim("getNumbersStats", json!({ "country": "all" }), true)
     }
 
-    /// Tariffs for one country (default `7`).
+    /// Tariffs for one country (default [`DEFAULT_COUNTRY`]).
     pub fn tariffs_one(&self) -> Result<TariffCountryOne> {
-        self.tariffs_one_in(7)
+        self.tariffs_one_in(DEFAULT_COUNTRY)
     }
 
     /// Tariffs for an explicit country.

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::config::DEFAULT_COUNTRY;
 use crate::error::{Error, Result};
 use crate::http::Http;
 use crate::types::rent::{RentItem, RentTariff};
@@ -26,9 +27,9 @@ struct ListWrap {
 }
 
 impl RentApi {
-    /// Rent a number (JS defaults: country `7`, days `1`, extension `false`).
+    /// Rent a number (defaults: country [`DEFAULT_COUNTRY`], days `1`, extension `false`).
     pub async fn get(&self) -> Result<RentItem> {
-        self.get_with(7, 1, false).await
+        self.get_with(DEFAULT_COUNTRY, 1, false).await
     }
 
     /// Rent a number with explicit parameters.
@@ -108,9 +109,9 @@ impl RentApi {
             .await
     }
 
-    /// Rent tariff for country `7`.
+    /// Rent tariff for the default country.
     pub async fn tariffs_one(&self) -> Result<RentTariff> {
-        self.tariffs_one_in(7).await
+        self.tariffs_one_in(DEFAULT_COUNTRY).await
     }
 
     /// Rent tariff for an explicit country.

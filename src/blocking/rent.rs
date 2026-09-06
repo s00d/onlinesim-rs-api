@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::config::DEFAULT_COUNTRY;
 use crate::error::{Error, Result};
 use crate::types::rent::{RentItem, RentTariff};
 
@@ -27,9 +28,9 @@ struct ListWrap {
 }
 
 impl RentApi {
-    /// Rent a number (JS defaults).
+    /// Rent a number (default country).
     pub fn get(&self) -> Result<RentItem> {
-        self.get_with(7, 1, false)
+        self.get_with(DEFAULT_COUNTRY, 1, false)
     }
 
     /// Rent a number with explicit parameters.
@@ -96,9 +97,9 @@ impl RentApi {
         self.http.get_onlinesim("rent/tariffsRent", json!({}), true)
     }
 
-    /// Rent tariff for country `7`.
+    /// Rent tariff for the default country.
     pub fn tariffs_one(&self) -> Result<RentTariff> {
-        self.tariffs_one_in(7)
+        self.tariffs_one_in(DEFAULT_COUNTRY)
     }
 
     /// Rent tariff for an explicit country.

@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::config::DEFAULT_COUNTRY;
 use crate::error::{Error, Result};
 use crate::http::Http;
 use crate::types::numbers::{
@@ -57,9 +58,9 @@ struct ServiceNumberResp {
 }
 
 impl NumbersApi {
-    /// Get price for a service (country default `7`).
+    /// Get price for a service (country default [`DEFAULT_COUNTRY`]).
     pub async fn price(&self, service: &str) -> Result<String> {
-        self.price_in(service, 7).await
+        self.price_in(service, DEFAULT_COUNTRY).await
     }
 
     /// Get price for a service in a country.
@@ -79,7 +80,7 @@ impl NumbersApi {
         }
     }
 
-    /// Order a number with JS-compatible defaults (`country=7`, empty reject).
+    /// Order a number with defaults (`country` = [`DEFAULT_COUNTRY`], empty reject).
     pub async fn get(&self, service: &str) -> Result<i64> {
         self.get_with(GetNumberParams::new(service)).await
     }
@@ -102,7 +103,7 @@ impl NumbersApi {
         Ok(resp.tzid)
     }
 
-    /// Order a number and return `tzid` + number (JS defaults).
+    /// Order a number and return `tzid` + number (default country).
     pub async fn get_with_number(&self, service: &str) -> Result<NumberWithTz> {
         self.get_with_number_params(GetNumberParams::new(service))
             .await
@@ -169,7 +170,7 @@ impl NumbersApi {
             .await
     }
 
-    /// State for a single `tzid` with JS defaults.
+    /// State for a single `tzid` with default flags.
     pub async fn state_one(&self, tzid: i64) -> Result<StateOne> {
         self.state_one_with(tzid, 1, true, true, false).await
     }
@@ -249,9 +250,9 @@ impl NumbersApi {
             .await
     }
 
-    /// Tariffs for one country (default `7`).
+    /// Tariffs for one country (default [`DEFAULT_COUNTRY`]).
     pub async fn tariffs_one(&self) -> Result<TariffCountryOne> {
-        self.tariffs_one_in(7).await
+        self.tariffs_one_in(DEFAULT_COUNTRY).await
     }
 
     /// Tariffs for an explicit country.
