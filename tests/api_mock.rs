@@ -120,6 +120,31 @@ async fn free_and_rent() {
 }
 
 #[tokio::test]
+async fn webhook_url_and_logs() {
+    let mock = MockOnlineSim::start().await;
+    let client = mock.client().unwrap();
+
+    client
+        .user()
+        .set_webhook_url(Some("https://example.test/hook"))
+        .await
+        .unwrap();
+    let profile = client.user().profile().await.unwrap();
+    assert_eq!(
+        profile.webhook_url.as_deref(),
+        Some("https://example.test/hook")
+    );
+
+    let logs = client.user().webhook_logs(1).await.unwrap();
+    assert_eq!(logs.data.len(), 1);
+    assert_eq!(logs.data[0].status.as_deref(), Some("success"));
+
+    client.user().clear_webhook_url().await.unwrap();
+    let profile = client.user().profile().await.unwrap();
+    assert!(profile.webhook_url.is_none());
+}
+
+#[tokio::test]
 async fn tariffs() {
     let mock = MockOnlineSim::start().await;
     let client = mock.client().unwrap();

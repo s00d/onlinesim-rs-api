@@ -48,6 +48,43 @@ async fn main() -> onlinesim_rs_api::Result<()> {
 }
 ```
 
+## Webhooks
+
+OnlineSim can `POST` JSON to your URL when an SMS arrives (temporary numbers and rent).
+
+```rust
+use onlinesim_rs_api::{parse_webhook_json, Client};
+
+#[tokio::main]
+async fn main() -> onlinesim_rs_api::Result<()> {
+    let client = Client::new("your-apikey")?;
+
+    // Save URL on the profile (also applied to active receive/rent ops).
+    client
+        .user()
+        .set_webhook_url(Some("https://example.com/hooks/sms"))
+        .await?;
+
+    // In your HTTP handler:
+    let body = r#"{"user_id":1,"country_code":1,"number":"+19001234567","sender":"Telegram","message":"code 123456","time_start":"2026-01-01 00:00:00","time_left":10,"operation_id":1000,"webhook_type":"receiving_sms","code":"123456"}"#;
+    let payload = parse_webhook_json(body)?;
+    assert_eq!(payload.code, "123456");
+
+    let logs = client.user().webhook_logs(1).await?;
+    println!("{} delivery log(s)", logs.data.len());
+    Ok(())
+}
+```
+
+Respond with **HTTP 200**. Payload fields may be numbers or strings; `WebhookPayload` / `parse_webhook_json` accept both, and also `{ "data": { ... } }` wraps.
+
+| Method | Purpose |
+|--------|---------|
+| `user().set_webhook_url(Some(url))` | Enable / change webhook |
+| `user().clear_webhook_url()` | Disable |
+| `user().webhook_logs(page)` | Delivery history |
+| `parse_webhook_json` / `WebhookPayload` | Parse inbound POST body |
+
 ## Built-in mocks (no real numbers)
 
 ```rust
@@ -95,7 +132,7 @@ cargo run --example mock_sms_flow --features mock
 | `set_balance(...)` | Control `getBalance` |
 | `client()` | Preconfigured `Client` pointed at the mock |
 
-Covered endpoints include: `getBalance`, `getProfile`, `getNum`, `getState`, `setOperationOk` / `Revise`, `getPrice`, `getNumbersStats`, free-list endpoints, rent get/state/close/tariffs.
+Covered endpoints include: `getBalance`, `getProfile`, `profile` (webhook save), `webhook-logs`, `getNum`, `getState`, `setOperationOk` / `Revise`, `getPrice`, `getNumbersStats`, free-list endpoints, rent get/state/close/tariffs.
 
 ## API modules
 
@@ -103,7 +140,7 @@ Covered endpoints include: `getBalance`, `getProfile`, `getNum`, `getState`, `se
 |--------|--------|
 | `client.numbers()` | Temporary SMS numbers |
 | `client.rent()` | Long-term number rent |
-| `client.user()` | Balance / profile / payments |
+| `client.user()` | Balance / profile / payments / webhooks |
 | `client.free()` | Public free numbers |
 
 ## Examples

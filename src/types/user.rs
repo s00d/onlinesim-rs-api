@@ -70,6 +70,9 @@ pub struct User {
     /// Rejected numbers.
     #[serde(default)]
     pub number_reject: Option<Vec<String>>,
+    /// URL that receives SMS webhooks (`POST` JSON). Empty / null disables webhooks.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
     /// User group.
     #[serde(default)]
     pub ugroup: Option<i64>,

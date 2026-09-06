@@ -6,6 +6,9 @@
 //! - `blocking` — synchronous [`blocking::Client`]
 //! - `mock` — built-in [`mock::MockOnlineSim`] HTTP server for tests (no real numbers)
 //!
+//! Incoming SMS webhooks: [`WebhookPayload`] / [`parse_webhook_json`]; configure the URL
+//! with `client.user().set_webhook_url(...)` and inspect delivery via `webhook_logs`.
+//!
 //! # Example
 //!
 //! ```no_run
@@ -67,6 +70,7 @@ pub use builder::ClientBuilder;
 pub use config::{Config, DEFAULT_BASE_URL, DEFAULT_COUNTRY};
 pub use error::{request_error_message, Error, Result};
 pub use types::numbers::{GetNumberParams, WaitCodeOptions};
+pub use types::webhook::{parse_webhook_json, WebhookPayload, WebhookType};
 
 #[cfg(feature = "async")]
 pub use client::Client;

@@ -71,4 +71,29 @@ impl Http {
         let value: Value = response.json().await?;
         from_api_value(parse_api_value(value)?)
     }
+
+    /// POST JSON against the OnlineSim base URL.
+    pub async fn post_onlinesim<T, B>(&self, path: &str, body: B, php_suffix: bool) -> Result<T>
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+    {
+        let url = Self::join_url(&self.config.base_url, path, php_suffix);
+        let body = with_auth_params(
+            serde_json::to_value(body)?,
+            self.config.apikey.as_deref(),
+            &self.config.lang,
+            self.config.dev_id,
+        );
+        let response = self
+            .client
+            .post(&url)
+            .headers(self.headers()?)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+        let value: Value = response.json().await?;
+        from_api_value(parse_api_value(value)?)
+    }
 }

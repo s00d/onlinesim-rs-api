@@ -1,13 +1,13 @@
 //! HTTP helpers: query encoding and OnlineSim response parsing.
 
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::de::{self, Deserializer, Visitor};
 use serde_json::{Map, Value};
+use std::fmt;
 
 use crate::error::{Error, Result};
 
 /// Encode a serializable value as `application/x-www-form-urlencoded` query pairs.
-pub fn to_query_pairs(params: impl Serialize) -> Result<Vec<(String, String)>> {
+pub fn to_query_pairs(params: impl serde::Serialize) -> Result<Vec<(String, String)>> {
     let value = serde_json::to_value(params)?;
     let mut out = Vec::new();
     match value {
@@ -83,7 +83,7 @@ pub fn parse_api_value(mut value: Value) -> Result<Value> {
 }
 
 /// Deserialize a parsed API value into `T`.
-pub fn from_api_value<T: DeserializeOwned>(value: Value) -> Result<T> {
+pub fn from_api_value<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
     Ok(serde_json::from_value(value)?)
 }
 
@@ -109,4 +109,38 @@ pub fn with_auth_params(
         obj.insert("dev_id".to_string(), Value::Number(id.into()));
     }
     params
+}
+
+/// Deserialize `i64` from either a JSON number or a decimal string.
+pub fn de_i64_flexible<'de, D>(deserializer: D) -> std::result::Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Flex;
+
+    impl<'de> Visitor<'de> for Flex {
+        type Value = i64;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("i64 or stringified i64")
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<i64, E> {
+            Ok(v)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<i64, E> {
+            i64::try_from(v).map_err(E::custom)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<i64, E> {
+            v.parse().map_err(E::custom)
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<i64, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    deserializer.deserialize_any(Flex)
 }

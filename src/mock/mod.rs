@@ -110,6 +110,8 @@ struct MockState {
     income: f64,
     /// If set, next `getBalance` returns this API error code once.
     balance_error: Option<String>,
+    /// Profile webhook URL.
+    webhook_url: Option<String>,
     next_tzid: i64,
     scripts: Vec<SmsScript>,
     ops: HashMap<i64, Operation>,
@@ -131,6 +133,7 @@ impl MockOnlineSim {
             zbalance: 0.0,
             income: 25.0,
             balance_error: None,
+            webhook_url: None,
             next_tzid: 1000,
             scripts: Vec::new(),
             ops: HashMap::new(),
@@ -199,8 +202,14 @@ impl MockOnlineSim {
 }
 
 async fn mount_handlers(server: &MockServer, state: Arc<Mutex<MockState>>) {
-    // Catch-all GET under /api/ — stateful responder inspects path.
     Mock::given(method("GET"))
+        .and(wiremock::matchers::path_regex(r"^/api/.*"))
+        .respond_with(ApiResponder {
+            state: state.clone(),
+        })
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
         .and(wiremock::matchers::path_regex(r"^/api/.*"))
         .respond_with(ApiResponder { state })
         .mount(server)
@@ -236,7 +245,9 @@ impl wiremock::Respond for ApiResponder {
             "setOperationOk" => handle_close(&self.state, &query),
             "setOperationRevise" => handle_next(&self.state, &query),
             "getNumbersStats" => handle_tariffs(&query),
-            "getProfile" => handle_profile(),
+            "getProfile" => handle_profile(&self.state),
+            "profile" => handle_profile_save(&self.state, request),
+            "webhook-logs" => handle_webhook_logs(),
             "getPaymentHistory" => handle_payment_history(),
             "getFreeCountryList" => handle_free_countries(),
             "getFreePhoneList" => handle_free_numbers(&query),
@@ -461,7 +472,8 @@ fn handle_tariffs(query: &HashMap<String, String>) -> Value {
     }
 }
 
-fn handle_profile() -> Value {
+fn handle_profile(state: &Arc<Mutex<MockState>>) -> Value {
+    let g = state.lock().expect("mock state");
     json!({
         "response": "1",
         "profile": {
@@ -473,7 +485,61 @@ fn handle_profile() -> Value {
             "ugroup": 1,
             "verify": 1,
             "block": 0,
+            "webhook_url": g.webhook_url,
             "payment": { "payment": 100.0, "income": 25.0, "spent": 10.0, "now": 0.0 }
+        }
+    })
+}
+
+fn handle_profile_save(state: &Arc<Mutex<MockState>>, request: &Request) -> Value {
+    let mut g = state.lock().expect("mock state");
+    if let Ok(value) = serde_json::from_slice::<Value>(&request.body) {
+        if let Some(url) = value
+            .pointer("/profile/webhook_url")
+            .and_then(|v| match v {
+                Value::Null => Some(None),
+                Value::String(s) if s.is_empty() => Some(None),
+                Value::String(s) => Some(Some(s.clone())),
+                _ => None,
+            })
+        {
+            g.webhook_url = url;
+        }
+    }
+    json!({ "response": "1" })
+}
+
+fn handle_webhook_logs() -> Value {
+    json!({
+        "response": "1",
+        "data": {
+            "current_page": 1,
+            "per_page": 10,
+            "total": 1,
+            "last_page": 1,
+            "data": [
+                {
+                    "id": 1,
+                    "type": "receiving_sms",
+                    "user_id": 1,
+                    "webhook_url": "https://example.test/hook",
+                    "params": {
+                        "user_id": 1,
+                        "country_code": 1,
+                        "number": "+19001234567",
+                        "sender": "Telegram",
+                        "message": "code 123456",
+                        "time_start": "2026-01-01 00:00:00",
+                        "time_left": 10,
+                        "operation_id": 1000,
+                        "webhook_type": "receiving_sms",
+                        "code": "123456"
+                    },
+                    "status": "success",
+                    "error": null,
+                    "created_at": "2026-01-01T00:00:00Z"
+                }
+            ]
         }
     })
 }
