@@ -1,5 +1,6 @@
 [![Crates.io](https://img.shields.io/crates/v/onlinesim-rs-api?style=for-the-badge)](https://crates.io/crates/onlinesim-rs-api)
 [![Documentation](https://img.shields.io/badge/docs-docs.rs-blue?style=for-the-badge)](https://docs.rs/onlinesim-rs-api)
+[![Wiki](https://img.shields.io/badge/docs-Wiki-green?style=for-the-badge)](https://github.com/s00d/onlinesim-rs-api/wiki)
 [![GitHub issues](https://img.shields.io/github/issues/s00d/onlinesim-rs-api?style=for-the-badge)](https://github.com/s00d/onlinesim-rs-api/issues)
 [![GitHub stars](https://img.shields.io/github/stars/s00d/onlinesim-rs-api?style=for-the-badge)](https://github.com/s00d/onlinesim-rs-api/stargazers)
 [![Donate](https://img.shields.io/badge/Donate-Donationalerts-ff4081?style=for-the-badge)](https://www.donationalerts.com/r/s00d88)
@@ -11,6 +12,8 @@
 # onlinesim-rs-api
 
 Rust client for [OnlineSim](https://onlinesim.io) SMS API with full serde typing, async and blocking clients, and a built-in mock server for tests.
+
+Guides and API examples: [GitHub Wiki](https://github.com/s00d/onlinesim-rs-api/wiki).
 
 ## Features
 
