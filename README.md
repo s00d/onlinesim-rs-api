@@ -6,11 +6,7 @@
 
 # onlinesim-rs-api
 
-Rust client for [OnlineSim](https://onlinesim.io) SMS API.
-
-Port of [`onlinesim-js-api`](https://github.com/s00d/onlinesim-js-api) with idiomatic Rust structure, full serde typing, async + blocking features, and a **built-in mock server** for tests (no paid numbers).
-
-Proxy / OnlineProxy APIs are **not** included.
+Rust client for [OnlineSim](https://onlinesim.io) SMS API with full serde typing, async and blocking clients, and a built-in mock server for tests.
 
 ## Features
 
