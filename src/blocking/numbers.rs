@@ -271,7 +271,6 @@ impl NumbersApi {
     /// one background thread that polls **all** active numbers via [`Self::state`].
     /// The thread starts with the first waiter and stops when none remain.
     pub fn wait_code(&self, tzid: i64, options: WaitCodeOptions) -> Result<String> {
-        self.wait_poller
-            .wait_code(self.http.clone(), tzid, options)
+        self.wait_poller.wait_code(self.http.clone(), tzid, options)
     }
 }

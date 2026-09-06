@@ -23,9 +23,9 @@ impl UserApi {
 
     /// User profile (includes `webhook_url`).
     pub fn profile(&self) -> Result<User> {
-        let resp: ProfileResponse = self
-            .http
-            .get_onlinesim("getProfile", json!({ "income": true }), true)?;
+        let resp: ProfileResponse =
+            self.http
+                .get_onlinesim("getProfile", json!({ "income": true }), true)?;
         Ok(resp.profile)
     }
 
@@ -58,9 +58,9 @@ impl UserApi {
 
     /// Paginated webhook delivery logs.
     pub fn webhook_logs(&self, page: i64) -> Result<WebhookLogsPage> {
-        let wrap: WebhookLogsWrap = self
-            .http
-            .get_onlinesim("webhook-logs", json!({ "page": page }), false)?;
+        let wrap: WebhookLogsWrap =
+            self.http
+                .get_onlinesim("webhook-logs", json!({ "page": page }), false)?;
         Ok(wrap.data)
     }
 }

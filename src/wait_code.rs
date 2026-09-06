@@ -247,9 +247,9 @@ pub mod async_poller {
             for (tzid, code, tx, _) in outcome.deliveries {
                 let res = match done_tzid.get(&tzid) {
                     Some(None) | None => Ok(code),
-                    Some(Some(e)) => Err(Error::Unexpected(format!(
-                        "wait_code finish failed: {e}"
-                    ))),
+                    Some(Some(e)) => {
+                        Err(Error::Unexpected(format!("wait_code finish failed: {e}")))
+                    }
                 };
                 let _ = tx.send(res);
             }
@@ -405,9 +405,9 @@ pub mod blocking_poller {
             for (tzid, code, tx, _) in outcome.deliveries {
                 let res = match done_tzid.get(&tzid) {
                     Some(None) | None => Ok(code),
-                    Some(Some(e)) => Err(Error::Unexpected(format!(
-                        "wait_code finish failed: {e}"
-                    ))),
+                    Some(Some(e)) => {
+                        Err(Error::Unexpected(format!("wait_code finish failed: {e}")))
+                    }
                 };
                 let _ = tx.send(res);
             }

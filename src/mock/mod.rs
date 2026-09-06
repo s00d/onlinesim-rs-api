@@ -494,15 +494,12 @@ fn handle_profile(state: &Arc<Mutex<MockState>>) -> Value {
 fn handle_profile_save(state: &Arc<Mutex<MockState>>, request: &Request) -> Value {
     let mut g = state.lock().expect("mock state");
     if let Ok(value) = serde_json::from_slice::<Value>(&request.body) {
-        if let Some(url) = value
-            .pointer("/profile/webhook_url")
-            .and_then(|v| match v {
-                Value::Null => Some(None),
-                Value::String(s) if s.is_empty() => Some(None),
-                Value::String(s) => Some(Some(s.clone())),
-                _ => None,
-            })
-        {
+        if let Some(url) = value.pointer("/profile/webhook_url").and_then(|v| match v {
+            Value::Null => Some(None),
+            Value::String(s) if s.is_empty() => Some(None),
+            Value::String(s) => Some(Some(s.clone())),
+            _ => None,
+        }) {
             g.webhook_url = url;
         }
     }
