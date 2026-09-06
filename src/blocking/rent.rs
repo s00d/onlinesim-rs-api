@@ -57,6 +57,12 @@ impl RentApi {
     }
 
     /// State for one rent.
+    ///
+    /// # Warning
+    ///
+    /// Prefer [`Self::state`] and filter locally: one request for all active
+    /// rents is cheaper and less likely to hit rate limits than polling each
+    /// `tzid` separately.
     pub fn state_one(&self, tzid: i64) -> Result<RentItem> {
         let resp: ListWrap = self.http.get_onlinesim(
             "rent/getRentState",

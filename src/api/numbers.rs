@@ -171,11 +171,23 @@ impl NumbersApi {
     }
 
     /// State for a single `tzid` with default flags.
+    ///
+    /// # Warning
+    ///
+    /// Prefer [`Self::state`] and filter locally: one request for all active
+    /// numbers is cheaper and less likely to hit rate limits than polling each
+    /// `tzid` separately.
     pub async fn state_one(&self, tzid: i64) -> Result<StateOne> {
         self.state_one_with(tzid, 1, true, true, false).await
     }
 
     /// State for a single `tzid` with explicit flags.
+    ///
+    /// # Warning
+    ///
+    /// Prefer [`Self::state`] and filter locally: one request for all active
+    /// numbers is cheaper and less likely to hit rate limits than polling each
+    /// `tzid` separately.
     pub async fn state_one_with(
         &self,
         tzid: i64,
