@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::wait_code::blocking_hub::BlockingWaitHub;
+use crate::wait_code::blocking_poller::BlockingWaitPoller;
 
 use self::http::BlockingHttp;
 
@@ -23,7 +23,7 @@ use self::http::BlockingHttp;
 #[derive(Debug, Clone)]
 pub struct Client {
     http: BlockingHttp,
-    wait_hub: Arc<BlockingWaitHub>,
+    wait_poller: Arc<BlockingWaitPoller>,
 }
 
 impl Client {
@@ -40,7 +40,7 @@ impl Client {
     pub(crate) fn from_config(config: Config) -> Result<Self> {
         Ok(Self {
             http: BlockingHttp::new(config)?,
-            wait_hub: Arc::new(BlockingWaitHub::default()),
+            wait_poller: Arc::new(BlockingWaitPoller::default()),
         })
     }
 
@@ -48,7 +48,7 @@ impl Client {
     pub fn numbers(&self) -> NumbersApi {
         NumbersApi {
             http: self.http.clone(),
-            wait_hub: self.wait_hub.clone(),
+            wait_poller: self.wait_poller.clone(),
         }
     }
 

@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::types::numbers::{
     GetNumberParams, NumberWithTz, StateOne, TariffCountryOne, WaitCodeOptions,
 };
-use crate::wait_code::blocking_hub::BlockingWaitHub;
+use crate::wait_code::blocking_poller::BlockingWaitPoller;
 
 use super::http::BlockingHttp;
 
@@ -19,7 +19,7 @@ use super::http::BlockingHttp;
 #[derive(Debug, Clone)]
 pub struct NumbersApi {
     pub(crate) http: BlockingHttp,
-    pub(crate) wait_hub: Arc<BlockingWaitHub>,
+    pub(crate) wait_poller: Arc<BlockingWaitPoller>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,7 +271,7 @@ impl NumbersApi {
     /// one background thread that polls **all** active numbers via [`Self::state`].
     /// The thread starts with the first waiter and stops when none remain.
     pub fn wait_code(&self, tzid: i64, options: WaitCodeOptions) -> Result<String> {
-        self.wait_hub
+        self.wait_poller
             .wait_code(self.http.clone(), tzid, options)
     }
 }

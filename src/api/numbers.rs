@@ -12,13 +12,13 @@ use crate::http::Http;
 use crate::types::numbers::{
     GetNumberParams, NumberWithTz, StateOne, TariffCountryOne, WaitCodeOptions,
 };
-use crate::wait_code::async_hub::AsyncWaitHub;
+use crate::wait_code::async_poller::AsyncWaitPoller;
 
 /// Temporary numbers / SMS operations.
 #[derive(Debug, Clone)]
 pub struct NumbersApi {
     pub(crate) http: Http,
-    pub(crate) wait_hub: Arc<AsyncWaitHub>,
+    pub(crate) wait_poller: Arc<AsyncWaitPoller>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,7 +304,7 @@ impl NumbersApi {
     /// `interval_secs` is in **seconds**. When several waiters are active, the
     /// poller uses the **minimum** interval among them.
     pub async fn wait_code(&self, tzid: i64, options: WaitCodeOptions) -> Result<String> {
-        self.wait_hub
+        self.wait_poller
             .wait_code(self.http.clone(), tzid, options)
             .await
     }

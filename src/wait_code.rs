@@ -107,7 +107,7 @@ fn bump_attempts<T>(waiters: &mut Vec<Waiter<T>>) -> Vec<T> {
 }
 
 #[cfg(feature = "async")]
-pub mod async_hub {
+pub mod async_poller {
     use super::*;
     use crate::http::Http;
     use tokio::sync::oneshot;
@@ -116,17 +116,17 @@ pub mod async_hub {
 
     /// Shared async wait-code hub (one poller per [`crate::Client`]).
     #[derive(Clone, Default)]
-    pub struct AsyncWaitHub {
+    pub struct AsyncWaitPoller {
         inner: Arc<Mutex<Inner<Tx>>>,
     }
 
-    impl fmt::Debug for AsyncWaitHub {
+    impl fmt::Debug for AsyncWaitPoller {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("AsyncWaitHub")
+            f.write_str("AsyncWaitPoller")
         }
     }
 
-    impl AsyncWaitHub {
+    impl AsyncWaitPoller {
         /// Register `tzid` and wait until a code arrives (or timeout / poll error).
         pub async fn wait_code(
             &self,
@@ -136,7 +136,7 @@ pub mod async_hub {
         ) -> Result<String> {
             let (tx, rx) = oneshot::channel();
             let start = {
-                let mut g = self.inner.lock().expect("wait hub");
+                let mut g = self.inner.lock().expect("wait poller");
                 g.waiters.push(Waiter {
                     tzid,
                     options,
@@ -169,7 +169,7 @@ pub mod async_hub {
     async fn run_loop(inner: Arc<Mutex<Inner<Tx>>>, http: Http) {
         loop {
             let (interval, message_to_code) = {
-                let mut g = inner.lock().expect("wait hub");
+                let mut g = inner.lock().expect("wait poller");
                 if g.waiters.is_empty() {
                     g.running = false;
                     return;
@@ -180,7 +180,7 @@ pub mod async_hub {
             tokio::time::sleep(Duration::from_secs(interval)).await;
 
             let timeouts = {
-                let mut g = inner.lock().expect("wait hub");
+                let mut g = inner.lock().expect("wait poller");
                 bump_attempts(&mut g.waiters)
             };
             for tx in timeouts {
@@ -188,7 +188,7 @@ pub mod async_hub {
             }
 
             {
-                let mut g = inner.lock().expect("wait hub");
+                let mut g = inner.lock().expect("wait poller");
                 if g.waiters.is_empty() {
                     g.running = false;
                     return;
@@ -218,7 +218,7 @@ pub mod async_hub {
             };
 
             let outcome = {
-                let mut g = inner.lock().expect("wait hub");
+                let mut g = inner.lock().expect("wait poller");
                 match_states(&mut g.waiters, &states)
             };
 
@@ -258,7 +258,7 @@ pub mod async_hub {
 
     fn fail_all(inner: &Arc<Mutex<Inner<Tx>>>, err: Error) {
         let msg = err.to_string();
-        let mut g = inner.lock().expect("wait hub");
+        let mut g = inner.lock().expect("wait poller");
         for w in g.waiters.drain(..) {
             if let Some(tx) = w.tx {
                 let _ = tx.send(Err(Error::Unexpected(format!(
@@ -271,7 +271,7 @@ pub mod async_hub {
 }
 
 #[cfg(feature = "blocking")]
-pub mod blocking_hub {
+pub mod blocking_poller {
     use super::*;
     use crate::blocking::http::BlockingHttp;
     use std::sync::mpsc;
@@ -281,17 +281,17 @@ pub mod blocking_hub {
 
     /// Shared blocking wait-code hub (one poller thread per [`crate::blocking::Client`]).
     #[derive(Clone, Default)]
-    pub struct BlockingWaitHub {
+    pub struct BlockingWaitPoller {
         inner: Arc<Mutex<Inner<Tx>>>,
     }
 
-    impl fmt::Debug for BlockingWaitHub {
+    impl fmt::Debug for BlockingWaitPoller {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("BlockingWaitHub")
+            f.write_str("BlockingWaitPoller")
         }
     }
 
-    impl BlockingWaitHub {
+    impl BlockingWaitPoller {
         /// Register `tzid` and block until a code arrives (or timeout / poll error).
         pub fn wait_code(
             &self,
@@ -301,7 +301,7 @@ pub mod blocking_hub {
         ) -> Result<String> {
             let (tx, rx) = mpsc::sync_channel(1);
             let start = {
-                let mut g = self.inner.lock().expect("wait hub");
+                let mut g = self.inner.lock().expect("wait poller");
                 g.waiters.push(Waiter {
                     tzid,
                     options,
@@ -332,7 +332,7 @@ pub mod blocking_hub {
     fn run_loop(inner: Arc<Mutex<Inner<Tx>>>, http: BlockingHttp) {
         loop {
             let (interval, message_to_code) = {
-                let mut g = inner.lock().expect("wait hub");
+                let mut g = inner.lock().expect("wait poller");
                 if g.waiters.is_empty() {
                     g.running = false;
                     return;
@@ -343,7 +343,7 @@ pub mod blocking_hub {
             thread::sleep(Duration::from_secs(interval));
 
             let timeouts = {
-                let mut g = inner.lock().expect("wait hub");
+                let mut g = inner.lock().expect("wait poller");
                 bump_attempts(&mut g.waiters)
             };
             for tx in timeouts {
@@ -351,7 +351,7 @@ pub mod blocking_hub {
             }
 
             {
-                let mut g = inner.lock().expect("wait hub");
+                let mut g = inner.lock().expect("wait poller");
                 if g.waiters.is_empty() {
                     g.running = false;
                     return;
@@ -379,7 +379,7 @@ pub mod blocking_hub {
             };
 
             let outcome = {
-                let mut g = inner.lock().expect("wait hub");
+                let mut g = inner.lock().expect("wait poller");
                 match_states(&mut g.waiters, &states)
             };
 
@@ -416,7 +416,7 @@ pub mod blocking_hub {
 
     fn fail_all(inner: &Arc<Mutex<Inner<Tx>>>, err: Error) {
         let msg = err.to_string();
-        let mut g = inner.lock().expect("wait hub");
+        let mut g = inner.lock().expect("wait poller");
         for w in g.waiters.drain(..) {
             if let Some(tx) = w.tx {
                 let _ = tx.send(Err(Error::Unexpected(format!(
