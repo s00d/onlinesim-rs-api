@@ -120,17 +120,21 @@ pub struct NumberWithTz {
 }
 
 /// Options for [`crate::api::numbers::NumbersApi::wait_code`] / blocking twin.
+///
+/// Concurrent waits on one client share a single batch `getState` poller.
 #[derive(Debug, Clone)]
 pub struct WaitCodeOptions {
     /// Poll interval in **seconds** (default: `3`).
     ///
-    /// Unlike the JS client's millisecond quirk (`timeout=10` ms), this is seconds.
+    /// When several `wait_code` calls share a poller, the **minimum** interval wins.
     pub interval_secs: u64,
     /// Maximum number of poll attempts (default: `10`, matching JS attempt cap).
     pub max_attempts: u32,
     /// If true, call `next` instead of `close` when a code arrives.
     pub not_end: bool,
     /// If true, request full message text (`message_to_code = 0`).
+    ///
+    /// If any shared waiter sets this, the batch poll uses full messages.
     pub full_message: bool,
 }
 

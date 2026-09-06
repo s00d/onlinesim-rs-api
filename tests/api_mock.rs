@@ -88,6 +88,42 @@ async fn sms_flow_wait_code() {
 }
 
 #[tokio::test]
+async fn wait_code_batches_multiple_tzids() {
+    let mock = MockOnlineSim::start().await;
+    mock.script_sms(SmsScript {
+        service: "telegram".into(),
+        number: "+19001111111".into(),
+        code: "111111".into(),
+        polls_before_code: 1,
+        ..SmsScript::default()
+    });
+    mock.script_sms(SmsScript {
+        service: "whatsapp".into(),
+        number: "+19002222222".into(),
+        code: "222222".into(),
+        polls_before_code: 1,
+        ..SmsScript::default()
+    });
+
+    let client = mock.client().unwrap();
+    let a = client.numbers().get("telegram").await.unwrap();
+    let b = client.numbers().get("whatsapp").await.unwrap();
+
+    let opts = WaitCodeOptions {
+        interval_secs: 0,
+        max_attempts: 5,
+        ..WaitCodeOptions::default()
+    };
+    let numbers = client.numbers();
+    let (code_a, code_b) = tokio::join!(
+        numbers.wait_code(a, opts.clone()),
+        numbers.wait_code(b, opts),
+    );
+    assert_eq!(code_a.unwrap(), "111111");
+    assert_eq!(code_b.unwrap(), "222222");
+}
+
+#[tokio::test]
 async fn no_number() {
     let mock = MockOnlineSim::start().await;
     mock.fail_no_number("whatsapp");

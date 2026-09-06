@@ -1,7 +1,7 @@
 //! Temporary SMS numbers API.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -12,11 +12,13 @@ use crate::http::Http;
 use crate::types::numbers::{
     GetNumberParams, NumberWithTz, StateOne, TariffCountryOne, WaitCodeOptions,
 };
+use crate::wait_code::async_hub::AsyncWaitHub;
 
 /// Temporary numbers / SMS operations.
 #[derive(Debug, Clone)]
 pub struct NumbersApi {
     pub(crate) http: Http,
+    pub(crate) wait_hub: Arc<AsyncWaitHub>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,43 +294,18 @@ impl NumbersApi {
         Ok(resp.number)
     }
 
-    /// Poll until an SMS code arrives.
+    /// Wait until an SMS code arrives for `tzid`.
     ///
-    /// `interval_secs` is in **seconds** (unlike the JS client's millisecond quirk).
+    /// Concurrent `wait_code` calls on the same [`crate::Client`] share one
+    /// background poller that fetches **all** active numbers via [`Self::state`]
+    /// (no per-`tzid` `getState`). The poller starts with the first waiter and
+    /// stops when none remain.
+    ///
+    /// `interval_secs` is in **seconds**. When several waiters are active, the
+    /// poller uses the **minimum** interval among them.
     pub async fn wait_code(&self, tzid: i64, options: WaitCodeOptions) -> Result<String> {
-        let message_to_code = if options.full_message { 0 } else { 1 };
-        let mut last_code = String::new();
-        let mut attempts = 0u32;
-
-        loop {
-            tokio::time::sleep(Duration::from_secs(options.interval_secs)).await;
-            attempts += 1;
-            if attempts > options.max_attempts {
-                return Err(Error::Timeout);
-            }
-
-            let response = self
-                .state_one_with(tzid, message_to_code, false, true, false)
-                .await?;
-
-            if let Some(msg) = response.msg {
-                let code = match msg {
-                    Value::String(s) => s,
-                    Value::Number(n) => n.to_string(),
-                    other => other.to_string(),
-                };
-                if code != last_code {
-                    last_code = code;
-                    if options.not_end {
-                        self.next(tzid).await?;
-                    } else {
-                        self.close(tzid).await?;
-                    }
-                    break;
-                }
-            }
-        }
-
-        Ok(last_code)
+        self.wait_hub
+            .wait_code(self.http.clone(), tzid, options)
+            .await
     }
 }

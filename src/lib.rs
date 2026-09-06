@@ -50,6 +50,9 @@ mod config;
 mod error;
 mod util;
 
+#[cfg(any(feature = "async", feature = "blocking"))]
+mod wait_code;
+
 #[cfg(feature = "async")]
 mod api;
 #[cfg(feature = "async")]

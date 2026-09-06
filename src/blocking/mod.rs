@@ -1,7 +1,7 @@
 //! Blocking (synchronous) client API.
 
 mod free;
-mod http;
+pub(crate) mod http;
 mod numbers;
 mod rent;
 mod user;
@@ -11,8 +11,11 @@ pub use numbers::NumbersApi;
 pub use rent::RentApi;
 pub use user::UserApi;
 
+use std::sync::Arc;
+
 use crate::config::Config;
 use crate::error::Result;
+use crate::wait_code::blocking_hub::BlockingWaitHub;
 
 use self::http::BlockingHttp;
 
@@ -20,6 +23,7 @@ use self::http::BlockingHttp;
 #[derive(Debug, Clone)]
 pub struct Client {
     http: BlockingHttp,
+    wait_hub: Arc<BlockingWaitHub>,
 }
 
 impl Client {
@@ -36,6 +40,7 @@ impl Client {
     pub(crate) fn from_config(config: Config) -> Result<Self> {
         Ok(Self {
             http: BlockingHttp::new(config)?,
+            wait_hub: Arc::new(BlockingWaitHub::default()),
         })
     }
 
@@ -43,6 +48,7 @@ impl Client {
     pub fn numbers(&self) -> NumbersApi {
         NumbersApi {
             http: self.http.clone(),
+            wait_hub: self.wait_hub.clone(),
         }
     }
 

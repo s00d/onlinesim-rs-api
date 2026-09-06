@@ -1,8 +1,7 @@
 //! Blocking temporary SMS numbers API.
 
 use std::collections::HashMap;
-use std::thread;
-use std::time::Duration;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -12,6 +11,7 @@ use crate::error::{Error, Result};
 use crate::types::numbers::{
     GetNumberParams, NumberWithTz, StateOne, TariffCountryOne, WaitCodeOptions,
 };
+use crate::wait_code::blocking_hub::BlockingWaitHub;
 
 use super::http::BlockingHttp;
 
@@ -19,6 +19,7 @@ use super::http::BlockingHttp;
 #[derive(Debug, Clone)]
 pub struct NumbersApi {
     pub(crate) http: BlockingHttp,
+    pub(crate) wait_hub: Arc<BlockingWaitHub>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,39 +265,13 @@ impl NumbersApi {
         Ok(resp.number)
     }
 
-    /// Poll until an SMS code arrives (`interval_secs` in seconds).
+    /// Wait until an SMS code arrives for `tzid`.
+    ///
+    /// Concurrent `wait_code` calls on the same [`crate::blocking::Client`] share
+    /// one background thread that polls **all** active numbers via [`Self::state`].
+    /// The thread starts with the first waiter and stops when none remain.
     pub fn wait_code(&self, tzid: i64, options: WaitCodeOptions) -> Result<String> {
-        let message_to_code = if options.full_message { 0 } else { 1 };
-        let mut last_code = String::new();
-        let mut attempts = 0u32;
-
-        loop {
-            thread::sleep(Duration::from_secs(options.interval_secs));
-            attempts += 1;
-            if attempts > options.max_attempts {
-                return Err(Error::Timeout);
-            }
-
-            let response = self.state_one_with(tzid, message_to_code, false, true, false)?;
-
-            if let Some(msg) = response.msg {
-                let code = match msg {
-                    Value::String(s) => s,
-                    Value::Number(n) => n.to_string(),
-                    other => other.to_string(),
-                };
-                if code != last_code {
-                    last_code = code;
-                    if options.not_end {
-                        self.next(tzid)?;
-                    } else {
-                        self.close(tzid)?;
-                    }
-                    break;
-                }
-            }
-        }
-
-        Ok(last_code)
+        self.wait_hub
+            .wait_code(self.http.clone(), tzid, options)
     }
 }

@@ -1,5 +1,7 @@
 //! Async client.
 
+use std::sync::Arc;
+
 use crate::api::free::FreeApi;
 use crate::api::numbers::NumbersApi;
 use crate::api::rent::RentApi;
@@ -8,11 +10,13 @@ use crate::builder::ClientBuilder;
 use crate::config::Config;
 use crate::error::Result;
 use crate::http::Http;
+use crate::wait_code::async_hub::AsyncWaitHub;
 
 /// Async OnlineSim client.
 #[derive(Debug, Clone)]
 pub struct Client {
     http: Http,
+    wait_hub: Arc<AsyncWaitHub>,
 }
 
 impl Client {
@@ -29,6 +33,7 @@ impl Client {
     pub(crate) fn from_config(config: Config) -> Result<Self> {
         Ok(Self {
             http: Http::new(config)?,
+            wait_hub: Arc::new(AsyncWaitHub::default()),
         })
     }
 
@@ -36,6 +41,7 @@ impl Client {
     pub fn numbers(&self) -> NumbersApi {
         NumbersApi {
             http: self.http.clone(),
+            wait_hub: self.wait_hub.clone(),
         }
     }
 
