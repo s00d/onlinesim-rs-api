@@ -114,7 +114,7 @@ pub mod async_poller {
 
     type Tx = oneshot::Sender<Result<String>>;
 
-    /// Shared async wait-code hub (one poller per [`crate::Client`]).
+    /// Shared async wait-code poller (one per [`crate::Client`]).
     #[derive(Clone, Default)]
     pub struct AsyncWaitPoller {
         inner: Arc<Mutex<Inner<Tx>>>,
@@ -279,7 +279,7 @@ pub mod blocking_poller {
 
     type Tx = mpsc::SyncSender<Result<String>>;
 
-    /// Shared blocking wait-code hub (one poller thread per [`crate::blocking::Client`]).
+    /// Shared blocking wait-code poller (one thread per [`crate::blocking::Client`]).
     #[derive(Clone, Default)]
     pub struct BlockingWaitPoller {
         inner: Arc<Mutex<Inner<Tx>>>,
