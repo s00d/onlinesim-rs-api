@@ -1,10 +1,8 @@
-//! Unit tests for response parsing helpers.
+//! Pure unit tests (no HTTP). Integration coverage lives in `api_mock.rs`
+//! and uses the published [`onlinesim_rs_api::mock`] module.
 
 use onlinesim_rs_api::Error;
 use serde_json::json;
-
-// Re-test via public Error mapping; parse helpers are crate-private.
-// Integration coverage lives in tests/mock_api.rs.
 
 #[test]
 fn no_number_codes() {

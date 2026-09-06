@@ -110,6 +110,14 @@ ONLINESIM_APIKEY=... cargo run --example wait_sms
 cargo run --example mock_sms_flow --features mock
 ```
 
+## Testing
+
+HTTP integration tests use the same published [`mock`](https://docs.rs/onlinesim-rs-api/latest/onlinesim_rs_api/mock/) module that downstream crates depend on — not ad-hoc servers.
+
+```bash
+cargo test --features "mock,blocking"
+```
+
 ## License
 
 Apache License 2.0

@@ -107,6 +107,8 @@ struct MockState {
     balance: f64,
     zbalance: f64,
     income: f64,
+    /// If set, next `getBalance` returns this API error code once.
+    balance_error: Option<String>,
     next_tzid: i64,
     scripts: Vec<SmsScript>,
     ops: HashMap<i64, Operation>,
@@ -127,6 +129,7 @@ impl MockOnlineSim {
             balance: 100.0,
             zbalance: 0.0,
             income: 25.0,
+            balance_error: None,
             next_tzid: 1000,
             scripts: Vec::new(),
             ops: HashMap::new(),
@@ -151,12 +154,27 @@ impl MockOnlineSim {
             .build()
     }
 
+    /// Build a blocking [`crate::blocking::Client`] pointed at this mock.
+    #[cfg(feature = "blocking")]
+    pub fn client_blocking(&self) -> Result<crate::blocking::Client> {
+        crate::ClientBuilder::new()
+            .apikey("mock-key")
+            .base_url(self.base_url())
+            .build_blocking()
+    }
+
     /// Set balance fields returned by `getBalance`.
     pub fn set_balance(&self, balance: f64, zbalance: f64, income: f64) {
         let mut g = self.state.lock().expect("mock state");
         g.balance = balance;
         g.zbalance = zbalance;
         g.income = income;
+        g.balance_error = None;
+    }
+
+    /// Next `getBalance` call returns the given API error code (once).
+    pub fn fail_balance(&self, code: impl Into<String>) {
+        self.state.lock().expect("mock state").balance_error = Some(code.into());
     }
 
     /// Queue an SMS script. Next matching `getNum` consumes it.
@@ -247,7 +265,10 @@ impl wiremock::Respond for ApiResponder {
 }
 
 fn handle_balance(state: &Arc<Mutex<MockState>>) -> Value {
-    let g = state.lock().expect("mock state");
+    let mut g = state.lock().expect("mock state");
+    if let Some(code) = g.balance_error.take() {
+        return json!({ "response": code });
+    }
     json!({
         "response": "1",
         "balance": g.balance,

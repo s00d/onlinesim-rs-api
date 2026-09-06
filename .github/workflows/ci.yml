@@ -19,14 +19,10 @@ jobs:
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: test all features
-        run: cargo test --all-features
-      - name: test async-only
-        run: cargo test --no-default-features --features async
-      - name: test blocking-only
-        run: cargo test --no-default-features --features blocking --tests
-      - name: test mock
-        run: cargo test --features mock
+        run: cargo clippy --all-targets --features "async,blocking,mock" -- -D warnings
+      - name: test (published mock)
+        run: cargo test --features "async,blocking,mock"
+      - name: test async without mock (unit only)
+        run: cargo test --no-default-features --features async --test error_and_types
       - name: publish dry-run
         run: cargo publish --dry-run --allow-dirty

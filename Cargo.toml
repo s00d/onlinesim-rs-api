@@ -38,8 +38,11 @@ wiremock = { version = "0.6", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-wiremock = "0.6"
 serde_json = "1"
+
+[[test]]
+name = "api_mock"
+required-features = ["mock"]
 
 [[example]]
 name = "get_balance"
