@@ -77,6 +77,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use fs4::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use wiremock::matchers::method;
@@ -258,10 +259,11 @@ fn write_persisted_locked(file: &mut File, state: &MockState) -> Result<()> {
 
 fn with_state_file_lock<R>(path: &Path, f: impl FnOnce(&mut File) -> Result<R>) -> Result<R> {
     let mut file = open_state_file(path)?;
-    file.lock().map_err(io_err)?;
+    // Prefer fs4 over std::fs::File::lock (Rust 1.89+) so MSRV stays 1.75.
+    FileExt::lock(&file).map_err(io_err)?;
     let result = f(&mut file);
     // Unlock is best-effort; dropping the file also releases the lock.
-    let _ = file.unlock();
+    let _ = FileExt::unlock(&file);
     result
 }
 
