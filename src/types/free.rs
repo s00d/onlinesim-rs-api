@@ -22,7 +22,8 @@ pub struct FreeNumber {
     /// Max date string.
     #[serde(default)]
     pub maxdate: Option<String>,
-    /// Number.
+    /// Number (API may send string or integer).
+    #[serde(deserialize_with = "crate::util::de_string_flexible")]
     pub number: String,
     /// Country code.
     pub country: i64,
@@ -48,9 +49,9 @@ pub struct FreeMessage {
     /// Sender number.
     #[serde(default)]
     pub in_number: Option<String>,
-    /// Receiver number.
-    #[serde(default)]
-    pub my_number: Option<i64>,
+    /// Receiver number (API may send string or integer).
+    #[serde(default, deserialize_with = "crate::util::de_opt_string_flexible")]
+    pub my_number: Option<String>,
     /// Created at.
     #[serde(default)]
     pub created_at: Option<String>,

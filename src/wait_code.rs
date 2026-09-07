@@ -200,7 +200,7 @@ pub mod async_poller {
                     "getState",
                     json!({
                         "message_to_code": message_to_code,
-                        "orderby": "ASC",
+                        "orderby": "asc",
                         "msg_list": 0,
                         "clean": 1,
                         "type": "index",
@@ -362,7 +362,7 @@ pub mod blocking_poller {
                 "getState",
                 json!({
                     "message_to_code": message_to_code,
-                    "orderby": "ASC",
+                    "orderby": "asc",
                     "msg_list": 0,
                     "clean": 1,
                     "type": "index",

@@ -245,6 +245,11 @@ impl NumbersApi {
     }
 
     /// Repeat reception for a number.
+    ///
+    /// # Warning
+    ///
+    /// Current production routes do not expose `getNumRepeat` (only legacy demo /
+    /// frontend remnants). Prefer a fresh [`Self::get`] / [`Self::get_with`].
     pub async fn repeat(&self, service: &str, number: i64) -> Result<i64> {
         let resp: TzidResp = self
             .http
@@ -277,6 +282,11 @@ impl NumbersApi {
     }
 
     /// List services.
+    ///
+    /// # Warning
+    ///
+    /// Live `getService` currently throws (`repeat disabled`). Prefer
+    /// [`Self::tariffs`] / [`Self::tariffs_one_in`].
     pub async fn service(&self) -> Result<Vec<String>> {
         let resp: ServiceResp = self
             .http
@@ -286,6 +296,10 @@ impl NumbersApi {
     }
 
     /// Numbers available for a service.
+    ///
+    /// # Warning
+    ///
+    /// Live `getServiceNumber` route is commented out on current backend.
     pub async fn service_number(&self, service: &str) -> Result<Vec<String>> {
         let resp: ServiceNumberResp = self
             .http

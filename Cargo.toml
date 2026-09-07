@@ -1,8 +1,8 @@
 [package]
 name = "onlinesim-rs-api"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 description = "Rust client for OnlineSim SMS API"
 license = "Apache-2.0"
 authors = ["s00d"]

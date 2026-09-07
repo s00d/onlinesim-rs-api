@@ -38,6 +38,12 @@ impl UserApi {
     }
 
     /// Create an empty payment (`pay/createEmpty`, no `.php` suffix).
+    ///
+    /// # Warning
+    ///
+    /// Current backend `routes/api.php` no longer registers `pay/createEmpty`
+    /// (only `pay/checkPromo` and `pay/sendPay/{driver}`). Kept for older /
+    /// mirrored deployments.
     pub async fn create_empty(&self, params: Value) -> Result<Pay> {
         self.http
             .get_onlinesim("pay/createEmpty", params, false)

@@ -36,6 +36,11 @@ impl UserApi {
     }
 
     /// Create an empty payment.
+    ///
+    /// # Warning
+    ///
+    /// Current backend no longer registers `pay/createEmpty`. Kept for older /
+    /// mirrored deployments.
     pub fn create_empty(&self, params: Value) -> Result<Pay> {
         self.http.get_onlinesim("pay/createEmpty", params, false)
     }

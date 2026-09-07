@@ -45,7 +45,7 @@ pub struct RentItem {
     #[serde(default)]
     pub extension: Option<i64>,
     /// Sum paid.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_opt_f64_flexible")]
     pub sum: Option<f64>,
     /// Phone number.
     #[serde(default)]
@@ -56,18 +56,20 @@ pub struct RentItem {
     /// Remaining hours.
     #[serde(default)]
     pub hours: Option<i64>,
-    /// Extension price map entries.
-    #[serde(default)]
-    pub extend: Vec<HashMap<String, f64>>,
+    /// Extension price map (`{ "1": price, "7": price }`) or empty when extension off.
+    ///
+    /// Live API returns an object map when `extension != 0`, otherwise `[]`.
+    #[serde(default, deserialize_with = "crate::util::de_rent_extend_map")]
+    pub extend: HashMap<String, f64>,
     /// Checked flag.
     #[serde(default)]
     pub checked: Option<bool>,
     /// Reload flag.
     #[serde(default)]
     pub reload: Option<i64>,
-    /// Day extend flag.
-    #[serde(default)]
-    pub day_extend: Option<i64>,
+    /// Day-extend price (backend float).
+    #[serde(default, deserialize_with = "crate::util::de_opt_f64_flexible")]
+    pub day_extend: Option<f64>,
     /// Catch-all for extra fields.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -88,12 +90,12 @@ pub struct RentTariff {
     /// Sort position.
     pub position: i64,
     /// Count pricing.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_hashmap_f64_flexible")]
     pub count: HashMap<String, f64>,
     /// Days pricing.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_hashmap_f64_flexible")]
     pub days: HashMap<String, f64>,
     /// Extend price.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_opt_f64_flexible")]
     pub extend: Option<f64>,
 }

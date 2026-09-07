@@ -259,7 +259,7 @@ fn write_persisted_locked(file: &mut File, state: &MockState) -> Result<()> {
 
 fn with_state_file_lock<R>(path: &Path, f: impl FnOnce(&mut File) -> Result<R>) -> Result<R> {
     let mut file = open_state_file(path)?;
-    // Prefer fs4 over std::fs::File::lock (Rust 1.89+) so MSRV stays 1.75.
+    // Prefer fs4 over std::fs::File::lock (Rust 1.89+) so MSRV can stay below 1.89.
     FileExt::lock(&file).map_err(io_err)?;
     let result = f(&mut file);
     // Unlock is best-effort; dropping the file also releases the lock.
@@ -298,19 +298,25 @@ fn mutate_and_persist<R>(
             f(&mut g)
         }
         Some(path) => {
+            let mut f = Some(f);
             let mut out = None;
             let persist_result = with_state_file_lock(path, |file| {
                 let mut g = state.lock().expect("mock state");
                 if let Some(disk) = read_persisted_locked(file)? {
                     disk.reload_into(&mut g);
                 }
-                out = Some(f(&mut g));
+                out = Some(f.take().expect("mutate closure")(&mut g));
                 write_persisted_locked(file, &g)
             });
-            if let Err(e) = persist_result {
-                let _ = e;
+            match (out, persist_result, f) {
+                (Some(v), Ok(()), _) | (Some(v), Err(_), _) => v,
+                // Lock/open failed before mutation — still apply in-memory.
+                (None, _, Some(f)) => {
+                    let mut g = state.lock().expect("mock state");
+                    f(&mut g)
+                }
+                (None, _, None) => unreachable!("mutate closure consumed without result"),
             }
-            out.expect("mutate produced a value")
         }
     }
 }
@@ -527,20 +533,25 @@ impl wiremock::Respond for ApiResponder {
             }
             "getNumbersStats" => handle_tariffs(&query),
             "getProfile" => handle_profile(&self.state),
-            "profile" => {
-                mutate_and_persist(&self.state, persist, |g| handle_profile_save_inner(g, request))
-            }
+            "profile" => mutate_and_persist(&self.state, persist, |g| {
+                handle_profile_save_inner(g, request)
+            }),
             "webhook-logs" => handle_webhook_logs(),
             "getPaymentHistory" => handle_payment_history(),
             "getFreeCountryList" => handle_free_countries(),
             "getFreePhoneList" => handle_free_numbers(&query),
             "getFreeMessageList" => handle_free_messages(),
             "getFreeList" => handle_free_list(),
-            "rent/getRentNum" | "rent/extendRentState" => {
+            "rent/getRentNum" => {
                 mutate_and_persist(&self.state, persist, |g| handle_rent_get_inner(g, &query))
             }
+            "rent/extendRentState" => mutate_and_persist(&self.state, persist, |g| {
+                handle_rent_extend_inner(g, &query)
+            }),
             "rent/getRentState" => handle_rent_state(&self.state, &query),
-            "rent/portReload" => json!({ "response": "1" }),
+            "rent/portReload" => mutate_and_persist(&self.state, persist, |g| {
+                handle_rent_port_reload_inner(g, &query)
+            }),
             "rent/tariffsRent" => handle_rent_tariffs(&query),
             "getService" => json!({ "response": "1", "service": ["telegram", "whatsapp"] }),
             "getServiceNumber" => {
@@ -650,7 +661,12 @@ fn handle_get_state_inner(g: &mut MockState, query: &HashMap<String, String>) ->
 
     let ids: Vec<i64> = match tzid {
         Some(id) => vec![id],
-        None => g.ops.keys().copied().collect(),
+        None => g
+            .ops
+            .iter()
+            .filter(|(_, op)| op.service != "rent")
+            .map(|(id, _)| *id)
+            .collect(),
     };
 
     if ids.is_empty() {
@@ -662,7 +678,7 @@ fn handle_get_state_inner(g: &mut MockState, query: &HashMap<String, String>) ->
         let Some(op) = g.ops.get_mut(&id) else {
             continue;
         };
-        if op.closed {
+        if op.closed || op.service == "rent" {
             continue;
         }
         op.polls += 1;
@@ -696,8 +712,9 @@ fn handle_close_inner(g: &mut MockState, query: &HashMap<String, String>) -> Val
     if let Some(tzid) = query.get("tzid").and_then(|s| s.parse::<i64>().ok()) {
         if let Some(op) = g.ops.get_mut(&tzid) {
             op.closed = true;
+            return json!({ "response": 1, "tzid": tzid });
         }
-        return json!({ "response": 1, "tzid": tzid });
+        return json!({ "response": "ERROR_NO_TZID" });
     }
     json!({ "response": "ERROR_NO_TZID" })
 }
@@ -927,12 +944,60 @@ fn handle_rent_get_inner(g: &mut MockState, query: &HashMap<String, String>) -> 
             "number": format!("+{country}9000000000"),
             "time": 86400,
             "hours": 24,
-            "extend": [],
+            "extend": {},
             "checked": true,
             "reload": 0,
-            "day_extend": 0
+            "day_extend": 0.0
         }
     })
+}
+
+fn handle_rent_extend_inner(g: &mut MockState, query: &HashMap<String, String>) -> Value {
+    let Some(tzid) = query.get("tzid").and_then(|s| s.parse::<i64>().ok()) else {
+        return json!({ "response": "ERROR_NO_TZID" });
+    };
+    let days: i64 = query.get("days").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let Some(op) = g.ops.get_mut(&tzid) else {
+        return json!({ "response": "ERROR_NO_TZID" });
+    };
+    if op.service != "rent" || op.closed {
+        return json!({ "response": "ERROR_NO_TZID" });
+    }
+    let add_secs = days.saturating_mul(86_400);
+    // Mock keeps no separate time field on Operation; surface extended window in response.
+    json!({
+        "response": 1,
+        "item": {
+            "tzid": tzid,
+            "status": 1,
+            "messages": [],
+            "country": op.country,
+            "rent": 1,
+            "extension": 1,
+            "sum": 50.0,
+            "number": op.number,
+            "time": add_secs,
+            "hours": days.saturating_mul(24),
+            "extend": { "1": 40.0, "7": 200.0 },
+            "checked": true,
+            "reload": 0,
+            "day_extend": 40.0
+        }
+    })
+}
+
+fn handle_rent_port_reload_inner(g: &mut MockState, query: &HashMap<String, String>) -> Value {
+    let Some(tzid) = query.get("tzid").and_then(|s| s.parse::<i64>().ok()) else {
+        return json!({ "response": "ERROR_NO_TZID" });
+    };
+    if g.ops
+        .get(&tzid)
+        .is_some_and(|op| op.service == "rent" && !op.closed)
+    {
+        json!({ "response": "1", "tzid": tzid })
+    } else {
+        json!({ "response": "ERROR_NO_TZID" })
+    }
 }
 
 fn handle_rent_state(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) -> Value {
@@ -954,10 +1019,10 @@ fn handle_rent_state(state: &Arc<Mutex<MockState>>, query: &HashMap<String, Stri
                 "number": op.number,
                 "time": 86400,
                 "hours": 24,
-                "extend": [],
+                "extend": {},
                 "checked": true,
                 "reload": 0,
-                "day_extend": 0
+                "day_extend": 0.0
             })
         })
         .collect();

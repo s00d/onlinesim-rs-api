@@ -35,7 +35,7 @@ pub struct StateOne {
     #[serde(default)]
     pub country: Option<i64>,
     /// Operation sum / price.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_opt_f64_flexible")]
     pub sum: Option<f64>,
     /// Form / channel marker from API.
     #[serde(default)]
@@ -61,7 +61,8 @@ pub struct TariffService {
     pub count: i64,
     /// Popular flag.
     pub popular: bool,
-    /// Price.
+    /// Price (API may send `number_format` string).
+    #[serde(deserialize_with = "crate::util::de_f64_flexible")]
     pub price: f64,
     /// Service id.
     pub id: Value,

@@ -225,6 +225,11 @@ impl NumbersApi {
     }
 
     /// Repeat reception.
+    ///
+    /// # Warning
+    ///
+    /// Current production routes do not expose `getNumRepeat`. Prefer a fresh
+    /// [`Self::get`] / [`Self::get_with`].
     pub fn repeat(&self, service: &str, number: i64) -> Result<i64> {
         let resp: TzidResp = self.http.get_onlinesim(
             "getNumRepeat",
@@ -252,12 +257,21 @@ impl NumbersApi {
     }
 
     /// List services.
+    ///
+    /// # Warning
+    ///
+    /// Live `getService` currently throws (`repeat disabled`). Prefer
+    /// [`Self::tariffs`] / [`Self::tariffs_one_in`].
     pub fn service(&self) -> Result<Vec<String>> {
         let resp: ServiceResp = self.http.get_onlinesim("getService", json!({}), true)?;
         Ok(resp.service)
     }
 
     /// Numbers available for a service.
+    ///
+    /// # Warning
+    ///
+    /// Live `getServiceNumber` route is commented out on current backend.
     pub fn service_number(&self, service: &str) -> Result<Vec<String>> {
         let resp: ServiceNumberResp =
             self.http

@@ -6,18 +6,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Account balance snapshot (`getBalance`).
+///
+/// Live API often returns `balance` / `income_usd` as DECIMAL **strings**
+/// (`Payment::getPaymentAttribute` bypasses Eloquent casts); mocks use numbers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Balance {
     /// Main balance (`payment`).
+    #[serde(deserialize_with = "crate::util::de_f64_flexible")]
     pub balance: f64,
     /// Frozen / held balance (`now`).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_f64_flexible")]
     pub zbalance: f64,
     /// Income when `income=true`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_opt_f64_flexible")]
     pub income: Option<f64>,
     /// Income in USD when provided.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_opt_f64_flexible")]
     pub income_usd: Option<f64>,
 }
 
@@ -25,16 +29,16 @@ pub struct Balance {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserPayment {
     /// Payment total.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_f64_flexible")]
     pub payment: f64,
     /// Income.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_f64_flexible")]
     pub income: f64,
     /// Spent.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_f64_flexible")]
     pub spent: f64,
     /// Current balance.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_f64_flexible")]
     pub now: f64,
 }
 
@@ -67,9 +71,9 @@ pub struct User {
     /// Preferred number country.
     #[serde(default)]
     pub number_country: Option<i64>,
-    /// Rejected numbers.
-    #[serde(default)]
-    pub number_reject: Option<Vec<String>>,
+    /// Rejected numbers (API may send `{}`, `[]`, or a list of ids/strings).
+    #[serde(default, deserialize_with = "crate::util::de_opt_json_value")]
+    pub number_reject: Option<Value>,
     /// URL that receives SMS webhooks (`POST` JSON). Empty / null disables webhooks.
     #[serde(default)]
     pub webhook_url: Option<String>,
@@ -105,7 +109,7 @@ pub struct PayOrder {
     #[serde(default)]
     pub sum: Option<String>,
     /// Cashback.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_opt_f64_flexible")]
     pub cashback: Option<f64>,
     /// Form id.
     #[serde(default)]
@@ -117,7 +121,7 @@ pub struct PayOrder {
     #[serde(default)]
     pub promo: Option<String>,
     /// Original sum.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_opt_f64_flexible")]
     pub original_sum: Option<f64>,
     /// Currency code.
     #[serde(default)]
@@ -187,7 +191,11 @@ pub struct PayMethod {
     #[serde(default)]
     pub add: HashMap<String, String>,
     /// Percent coefficient.
-    #[serde(default, rename = "coofPersent")]
+    #[serde(
+        default,
+        rename = "coofPersent",
+        deserialize_with = "crate::util::de_opt_f64_flexible"
+    )]
     pub coeff_percent: Option<f64>,
     /// Supported currencies map.
     #[serde(default)]
@@ -210,7 +218,7 @@ pub struct PayList {
     #[serde(default)]
     pub forms: HashMap<String, Value>,
     /// Currency rates.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::util::de_hashmap_f64_flexible")]
     pub currency: HashMap<String, f64>,
     /// Orders pagination object.
     #[serde(default)]

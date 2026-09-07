@@ -28,9 +28,9 @@ struct ListWrap {
 }
 
 impl RentApi {
-    /// Rent a number (default country).
+    /// Rent a number (defaults: country [`DEFAULT_COUNTRY`], days `1`, extension `true`).
     pub fn get(&self) -> Result<RentItem> {
-        self.get_with(DEFAULT_COUNTRY, 1, false)
+        self.get_with(DEFAULT_COUNTRY, 1, true)
     }
 
     /// Rent a number with explicit parameters.

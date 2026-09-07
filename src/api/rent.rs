@@ -27,9 +27,9 @@ struct ListWrap {
 }
 
 impl RentApi {
-    /// Rent a number (defaults: country [`DEFAULT_COUNTRY`], days `1`, extension `false`).
+    /// Rent a number (defaults: country [`DEFAULT_COUNTRY`], days `1`, extension `true`).
     pub async fn get(&self) -> Result<RentItem> {
-        self.get_with(DEFAULT_COUNTRY, 1, false).await
+        self.get_with(DEFAULT_COUNTRY, 1, true).await
     }
 
     /// Rent a number with explicit parameters.

@@ -1,6 +1,6 @@
 //! HTTP helpers: query encoding and OnlineSim response parsing.
 
-use serde::de::{self, Deserializer, Visitor};
+use serde::de::{self, Deserialize, Deserializer, Visitor};
 use serde_json::{Map, Value};
 use std::fmt;
 
@@ -134,7 +134,7 @@ where
         }
 
         fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<i64, E> {
-            v.parse().map_err(E::custom)
+            v.trim().parse().map_err(E::custom)
         }
 
         fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<i64, E> {
@@ -143,4 +143,266 @@ where
     }
 
     deserializer.deserialize_any(Flex)
+}
+
+fn parse_f64_str<E: de::Error>(v: &str) -> std::result::Result<f64, E> {
+    let s = v.trim();
+    if s.is_empty() {
+        return Ok(0.0);
+    }
+    s.parse().map_err(E::custom)
+}
+
+/// Deserialize `f64` from a JSON number **or** decimal string.
+///
+/// OnlineSim frequently returns money as PDO DECIMAL strings (`"1674.540"`)
+/// while mocks / other endpoints use JSON numbers.
+pub fn de_f64_flexible<'de, D>(deserializer: D) -> std::result::Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Flex;
+
+    impl<'de> Visitor<'de> for Flex {
+        type Value = f64;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("f64 or stringified decimal")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> std::result::Result<f64, E> {
+            Ok(0.0)
+        }
+
+        fn visit_none<E: de::Error>(self) -> std::result::Result<f64, E> {
+            Ok(0.0)
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> std::result::Result<f64, E> {
+            Ok(v)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<f64, E> {
+            Ok(v as f64)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<f64, E> {
+            Ok(v as f64)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<f64, E> {
+            parse_f64_str(v)
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<f64, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    deserializer.deserialize_any(Flex)
+}
+
+/// Like [`de_f64_flexible`], but accepts JSON `null` → `None`.
+pub fn de_opt_f64_flexible<'de, D>(deserializer: D) -> std::result::Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Flex;
+
+    impl<'de> Visitor<'de> for Flex {
+        type Value = Option<f64>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("optional f64 or stringified decimal")
+        }
+
+        fn visit_unit<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_none<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D2: Deserializer<'de>>(
+            self,
+            deserializer: D2,
+        ) -> std::result::Result<Self::Value, D2::Error> {
+            de_f64_flexible(deserializer).map(Some)
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> std::result::Result<Self::Value, E> {
+            Ok(Some(v))
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<Self::Value, E> {
+            Ok(Some(v as f64))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<Self::Value, E> {
+            Ok(Some(v as f64))
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
+            parse_f64_str(v).map(Some)
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<Self::Value, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    deserializer.deserialize_any(Flex)
+}
+
+/// `HashMap<String, f64>` where each value may be a number or decimal string
+/// (tariff `days` / `count` / `currency` maps from `number_format`).
+pub fn de_hashmap_f64_flexible<'de, D>(
+    deserializer: D,
+) -> std::result::Result<std::collections::HashMap<String, f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use std::collections::HashMap;
+
+    struct Flex;
+
+    impl<'de> Visitor<'de> for Flex {
+        type Value = HashMap<String, f64>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("map of string keys to f64 or stringified decimal")
+        }
+
+        fn visit_map<A: de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            let mut out = HashMap::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let raw: Value = map.next_value()?;
+                let n = match raw {
+                    Value::Null => 0.0,
+                    Value::Number(n) => n.as_f64().ok_or_else(|| {
+                        de::Error::custom(format!("non-finite number for key {key}"))
+                    })?,
+                    Value::String(s) => parse_f64_str(&s)?,
+                    other => {
+                        return Err(de::Error::custom(format!(
+                            "expected number or string for key {key}, got {other}"
+                        )));
+                    }
+                };
+                out.insert(key, n);
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_map(Flex)
+}
+
+/// Rent `extend` field: live API sends a price **object** when extension is on,
+/// otherwise an empty **array** `[]`.
+pub fn de_rent_extend_map<'de, D>(
+    deserializer: D,
+) -> std::result::Result<std::collections::HashMap<String, f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use std::collections::HashMap;
+
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(HashMap::new()),
+        Value::Array(_) => Ok(HashMap::new()),
+        Value::Object(map) => {
+            let mut out = HashMap::new();
+            for (k, v) in map {
+                let n = match v {
+                    Value::Null => 0.0,
+                    Value::Number(n) => n.as_f64().ok_or_else(|| {
+                        de::Error::custom(format!("non-finite number for key {k}"))
+                    })?,
+                    Value::String(s) => parse_f64_str::<D::Error>(&s)?,
+                    other => {
+                        return Err(de::Error::custom(format!(
+                            "expected number or string for rent extend key {k}, got {other}"
+                        )));
+                    }
+                };
+                out.insert(k, n);
+            }
+            Ok(out)
+        }
+        other => Err(de::Error::custom(format!(
+            "expected object or array for rent extend, got {other}"
+        ))),
+    }
+}
+
+/// `String` from JSON string or number (free phone lists).
+pub fn de_string_flexible<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Flex;
+
+    impl<'de> Visitor<'de> for Flex {
+        type Value = String;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("string or number")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<String, E> {
+            Ok(v)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> std::result::Result<String, E> {
+            Ok(v.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(Flex)
+}
+
+/// Optional string from JSON string/number/`null`.
+pub fn de_opt_string_flexible<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Value>::deserialize(deserializer)?
+        .filter(|v| !v.is_null())
+        .map(|v| match v {
+            Value::String(s) => Ok(s),
+            Value::Number(n) => Ok(n.to_string()),
+            Value::Bool(b) => Ok(b.to_string()),
+            other => Err(de::Error::custom(format!(
+                "expected string or number, got {other}"
+            ))),
+        })
+        .transpose()
+}
+
+/// Optional JSON value; treats missing/`null` as `None`, keeps `{}` / `[]` as `Some`.
+pub fn de_opt_json_value<'de, D>(deserializer: D) -> std::result::Result<Option<Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<Value>::deserialize(deserializer)?.filter(|v| !v.is_null()))
 }
