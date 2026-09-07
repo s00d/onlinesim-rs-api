@@ -2,7 +2,7 @@
 name = "onlinesim-rs-api"
 version = "0.1.2"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.75"
 description = "Rust client for OnlineSim SMS API"
 license = "Apache-2.0"
 authors = ["s00d"]
