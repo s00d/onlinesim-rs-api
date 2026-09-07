@@ -259,10 +259,10 @@ fn write_persisted_locked(file: &mut File, state: &MockState) -> Result<()> {
 
 fn with_state_file_lock<R>(path: &Path, f: impl FnOnce(&mut File) -> Result<R>) -> Result<R> {
     let mut file = open_state_file(path)?;
-    file.lock().map_err(io_err)?;
+    FileExt::lock(&file).map_err(io_err)?;
     let result = f(&mut file);
     // Unlock is best-effort; dropping the file also releases the lock.
-    let _ = file.unlock();
+    let _ = FileExt::unlock(&file);
     result
 }
 
