@@ -72,6 +72,43 @@ fn tariff_price_accepts_number_format_string() {
 }
 
 #[test]
+fn tariff_country_services_accepts_empty_array_like_live_api() {
+    // getNumbersStats: some countries (e.g. 356) return `"services": []`
+    // because PHP encodes an empty assoc array as a JSON array.
+    let v = json!({
+        "name": "Malta",
+        "position": 99,
+        "code": 356,
+        "other": false,
+        "new": false,
+        "enabled": true,
+        "locale_name": "Malta",
+        "services": []
+    });
+    let c: onlinesim_rs_api::types::numbers::TariffCountryOne = serde_json::from_value(v).unwrap();
+    assert!(c.services.is_empty());
+    assert_eq!(c.code, 356);
+    assert_eq!(c.other, Some(false));
+}
+
+#[test]
+fn tariff_service_accepts_live_row_with_code() {
+    let v = json!({
+        "count": 8977,
+        "popular": false,
+        "code": 49,
+        "price": 1,
+        "id": 1,
+        "service": "VKontakte + Mail.ru",
+        "slug": "vkcom"
+    });
+    let s: onlinesim_rs_api::types::numbers::TariffService = serde_json::from_value(v).unwrap();
+    assert_eq!(s.count, 8977);
+    assert_eq!(s.code, Some(49));
+    assert!((s.price - 1.0).abs() < 1e-9);
+}
+
+#[test]
 fn rent_days_map_accepts_string_prices() {
     let v = json!({
         "code": 7,

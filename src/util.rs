@@ -255,8 +255,23 @@ where
     deserializer.deserialize_any(Flex)
 }
 
+fn f64_from_value<E: de::Error>(key: &str, raw: Value) -> std::result::Result<f64, E> {
+    match raw {
+        Value::Null => Ok(0.0),
+        Value::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| E::custom(format!("non-finite number for key {key}"))),
+        Value::String(s) => parse_f64_str(&s),
+        other => Err(E::custom(format!(
+            "expected number or string for key {key}, got {other}"
+        ))),
+    }
+}
+
 /// `HashMap<String, f64>` where each value may be a number or decimal string
 /// (tariff `days` / `count` / `currency` maps from `number_format`).
+///
+/// Live API occasionally sends `[]` instead of `{}` for empty maps.
 pub fn de_hashmap_f64_flexible<'de, D>(
     deserializer: D,
 ) -> std::result::Result<std::collections::HashMap<String, f64>, D::Error>
@@ -265,41 +280,52 @@ where
 {
     use std::collections::HashMap;
 
-    struct Flex;
-
-    impl<'de> Visitor<'de> for Flex {
-        type Value = HashMap<String, f64>;
-
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("map of string keys to f64 or stringified decimal")
-        }
-
-        fn visit_map<A: de::MapAccess<'de>>(
-            self,
-            mut map: A,
-        ) -> std::result::Result<Self::Value, A::Error> {
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(HashMap::new()),
+        Value::Array(_) => Ok(HashMap::new()),
+        Value::Object(map) => {
             let mut out = HashMap::new();
-            while let Some(key) = map.next_key::<String>()? {
-                let raw: Value = map.next_value()?;
-                let n = match raw {
-                    Value::Null => 0.0,
-                    Value::Number(n) => n.as_f64().ok_or_else(|| {
-                        de::Error::custom(format!("non-finite number for key {key}"))
-                    })?,
-                    Value::String(s) => parse_f64_str(&s)?,
-                    other => {
-                        return Err(de::Error::custom(format!(
-                            "expected number or string for key {key}, got {other}"
-                        )));
-                    }
-                };
-                out.insert(key, n);
+            for (key, raw) in map {
+                out.insert(key.clone(), f64_from_value(&key, raw)?);
             }
             Ok(out)
         }
+        other => Err(de::Error::custom(format!(
+            "expected object or array for f64 map, got {other}"
+        ))),
     }
+}
 
-    deserializer.deserialize_map(Flex)
+/// Object map of `T`, or empty JSON array `[]` (PHP empty assoc arrays).
+///
+/// Live `getNumbersStats` returns `services: []` for some countries (e.g. 356).
+pub fn de_hashmap_or_empty_array<'de, T, D>(
+    deserializer: D,
+) -> std::result::Result<std::collections::HashMap<String, T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    use std::collections::HashMap;
+    use serde::de::IntoDeserializer;
+
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(HashMap::new()),
+        Value::Array(_) => Ok(HashMap::new()),
+        Value::Object(map) => {
+            let mut out = HashMap::new();
+            for (key, raw) in map {
+                let item = T::deserialize(raw.into_deserializer()).map_err(de::Error::custom)?;
+                out.insert(key, item);
+            }
+            Ok(out)
+        }
+        other => Err(de::Error::custom(format!(
+            "expected object or array for map, got {other}"
+        ))),
+    }
 }
 
 /// Rent `extend` field: live API sends a price **object** when extension is on,

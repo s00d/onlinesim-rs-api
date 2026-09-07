@@ -70,6 +70,12 @@ pub struct TariffService {
     pub service: Value,
     /// Slug.
     pub slug: Value,
+    /// Dial/country code sometimes repeated on the service row.
+    #[serde(default)]
+    pub code: Option<i64>,
+    /// Catch-all for extra fields.
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 /// Tariffs for one country (`getNumbersStats`).
@@ -89,8 +95,11 @@ pub struct TariffCountryOne {
     /// Localized name when present.
     #[serde(default)]
     pub locale_name: Option<String>,
-    /// Services map.
+    /// Reseller / misc flag from live stats payload.
     #[serde(default)]
+    pub other: Option<bool>,
+    /// Services map. Live API sends `[]` for some countries with no stock.
+    #[serde(default, deserialize_with = "crate::util::de_hashmap_or_empty_array")]
     pub services: HashMap<String, TariffService>,
 }
 
