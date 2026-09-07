@@ -133,6 +133,7 @@ cargo run --example mock_sms_flow --features mock
 | `script_sms(SmsScript)` | Queue number + SMS code delivery |
 | `fail_no_number(service)` | Force `NO_NUMBER` on `getNum` |
 | `set_balance(...)` | Control `getBalance` |
+| `builder().state_path(...)` | Persist balance/ops across process restarts (CLI) |
 | `client()` | Preconfigured `Client` pointed at the mock |
 
 Covered endpoints include: `getBalance`, `getProfile`, `profile` (webhook save), `webhook-logs`, `getNum`, `getState`, `setOperationOk` / `Revise`, `getPrice`, `getNumbersStats`, free-list endpoints, rent get/state/close/tariffs.

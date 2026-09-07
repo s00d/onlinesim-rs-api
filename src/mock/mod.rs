@@ -13,7 +13,7 @@
 //! HTTP server that speaks the OnlineSim JSON protocol so you can exercise
 //! `get` → `wait_code` → `close` without hitting production.
 //!
-//! # Example
+//! # Ephemeral (tests)
 //!
 //! ```no_run
 //! # #[cfg(all(feature = "mock", feature = "async"))]
@@ -49,18 +49,46 @@
 //! # }
 //! ```
 //!
+//! # Persistent state (CLI)
+//!
+//! Opt-in file path keeps balance / ops across process restarts. Test helpers
+//! (`scripts`, `no_number_for`, `balance_error`) are **not** persisted.
+//!
+//! ```no_run
+//! # #[cfg(all(feature = "mock", feature = "async"))]
+//! # async fn demo() -> onlinesim_rs_api::Result<()> {
+//! use onlinesim_rs_api::mock::MockOnlineSim;
+//! use std::path::PathBuf;
+//!
+//! let mock = MockOnlineSim::builder()
+//!     .state_path(PathBuf::from("/tmp/onlinesim-mock.json"))
+//!     // .state_path_from_env()  // ONLINESIM_MOCK_STATE
+//!     .start()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! Interval `0` is useful in tests (no sleep). Production code should use a few seconds.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use fs4::fs_std::FileExt;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use crate::config::DEFAULT_COUNTRY;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::Client;
+
+/// Env var read by [`MockOnlineSimBuilder::state_path_from_env`].
+pub const MOCK_STATE_ENV: &str = "ONLINESIM_MOCK_STATE";
 
 /// Script describing one mocked SMS purchase + delivery.
 #[derive(Debug, Clone)]
@@ -92,7 +120,7 @@ impl Default for SmsScript {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Operation {
     service: String,
     number: String,
@@ -103,14 +131,68 @@ struct Operation {
     closed: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedMockState {
+    version: u32,
+    balance: f64,
+    zbalance: f64,
+    income: f64,
+    webhook_url: Option<String>,
+    next_tzid: i64,
+    /// String keys for JSON object compatibility.
+    ops: BTreeMap<String, Operation>,
+}
+
+impl PersistedMockState {
+    fn from_runtime(state: &MockState) -> Self {
+        let mut ops = BTreeMap::new();
+        for (id, op) in &state.ops {
+            ops.insert(id.to_string(), op.clone());
+        }
+        Self {
+            version: 1,
+            balance: state.balance,
+            zbalance: state.zbalance,
+            income: state.income,
+            webhook_url: state.webhook_url.clone(),
+            next_tzid: state.next_tzid,
+            ops,
+        }
+    }
+
+    fn apply_to(&self, state: &mut MockState) {
+        state.balance = self.balance;
+        state.zbalance = self.zbalance;
+        state.income = self.income;
+        state.webhook_url = self.webhook_url.clone();
+        state.next_tzid = self.next_tzid;
+        state.ops.clear();
+        for (k, op) in &self.ops {
+            if let Ok(id) = k.parse::<i64>() {
+                state.ops.insert(id, op.clone());
+            }
+        }
+    }
+
+    /// Reload persisted fields from disk; keep ephemeral setup (`scripts`, etc.).
+    fn reload_into(&self, state: &mut MockState) {
+        let scripts = std::mem::take(&mut state.scripts);
+        let no_number_for = std::mem::take(&mut state.no_number_for);
+        let balance_error = state.balance_error.take();
+        self.apply_to(state);
+        state.scripts = scripts;
+        state.no_number_for = no_number_for;
+        state.balance_error = balance_error;
+    }
+}
+
 #[derive(Debug, Default)]
 struct MockState {
     balance: f64,
     zbalance: f64,
     income: f64,
-    /// If set, next `getBalance` returns this API error code once.
+    /// If set, next `getBalance` returns this API error code once (not persisted).
     balance_error: Option<String>,
-    /// Profile webhook URL.
     webhook_url: Option<String>,
     next_tzid: i64,
     scripts: Vec<SmsScript>,
@@ -118,17 +200,9 @@ struct MockState {
     no_number_for: Vec<String>,
 }
 
-/// Local OnlineSim mock server.
-pub struct MockOnlineSim {
-    server: MockServer,
-    state: Arc<Mutex<MockState>>,
-}
-
-impl MockOnlineSim {
-    /// Start a mock server with default balance `100` and mount all handlers.
-    pub async fn start() -> Self {
-        let server = MockServer::start().await;
-        let state = Arc::new(Mutex::new(MockState {
+impl MockState {
+    fn fresh() -> Self {
+        Self {
             balance: 100.0,
             zbalance: 0.0,
             income: 25.0,
@@ -138,11 +212,192 @@ impl MockOnlineSim {
             scripts: Vec::new(),
             ops: HashMap::new(),
             no_number_for: Vec::new(),
-        }));
+        }
+    }
+}
 
-        mount_handlers(&server, state.clone()).await;
+fn io_err(err: impl std::fmt::Display) -> Error {
+    Error::Unexpected(format!("mock state: {err}"))
+}
 
-        Self { server, state }
+fn open_state_file(path: &Path) -> Result<File> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(io_err)?;
+        }
+    }
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(io_err)
+}
+
+fn read_persisted_locked(file: &mut File) -> Result<Option<PersistedMockState>> {
+    file.seek(SeekFrom::Start(0)).map_err(io_err)?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).map_err(io_err)?;
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let parsed: PersistedMockState = serde_json::from_str(trimmed)?;
+    Ok(Some(parsed))
+}
+
+fn write_persisted_locked(file: &mut File, state: &MockState) -> Result<()> {
+    let persisted = PersistedMockState::from_runtime(state);
+    let data = serde_json::to_vec_pretty(&persisted)?;
+    file.seek(SeekFrom::Start(0)).map_err(io_err)?;
+    file.set_len(0).map_err(io_err)?;
+    file.write_all(&data).map_err(io_err)?;
+    file.sync_all().map_err(io_err)?;
+    Ok(())
+}
+
+fn with_state_file_lock<R>(path: &Path, f: impl FnOnce(&mut File) -> Result<R>) -> Result<R> {
+    let mut file = open_state_file(path)?;
+    file.lock_exclusive().map_err(io_err)?;
+    let result = f(&mut file);
+    // Unlock is best-effort; dropping the file also releases the lock.
+    let _ = FileExt::unlock(&file);
+    result
+}
+
+fn load_state_from_path(path: &Path) -> Result<MockState> {
+    let mut state = MockState::fresh();
+    with_state_file_lock(path, |file| {
+        if let Some(persisted) = read_persisted_locked(file)? {
+            persisted.apply_to(&mut state);
+        } else {
+            write_persisted_locked(file, &state)?;
+        }
+        Ok(())
+    })?;
+    Ok(state)
+}
+
+fn persist_snapshot(path: &Path, state: &Arc<Mutex<MockState>>) -> Result<()> {
+    with_state_file_lock(path, |file| {
+        let g = state.lock().expect("mock state");
+        write_persisted_locked(file, &g)
+    })
+}
+
+fn mutate_and_persist<R>(
+    state: &Arc<Mutex<MockState>>,
+    path: Option<&Path>,
+    f: impl FnOnce(&mut MockState) -> R,
+) -> R {
+    match path {
+        None => {
+            let mut g = state.lock().expect("mock state");
+            f(&mut g)
+        }
+        Some(path) => {
+            let mut out = None;
+            let persist_result = with_state_file_lock(path, |file| {
+                let mut g = state.lock().expect("mock state");
+                if let Some(disk) = read_persisted_locked(file)? {
+                    disk.reload_into(&mut g);
+                }
+                out = Some(f(&mut g));
+                write_persisted_locked(file, &g)
+            });
+            if let Err(e) = persist_result {
+                let _ = e;
+            }
+            out.expect("mutate produced a value")
+        }
+    }
+}
+
+/// Builder for [`MockOnlineSim`] with optional on-disk state.
+#[derive(Debug, Default, Clone)]
+pub struct MockOnlineSimBuilder {
+    state_path: Option<PathBuf>,
+}
+
+impl MockOnlineSimBuilder {
+    /// Create a builder (ephemeral unless a state path is set).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Persist mock state to this JSON file (load on start, save after mutations).
+    pub fn state_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.state_path = Some(path.into());
+        self
+    }
+
+    /// If [`MOCK_STATE_ENV`] (`ONLINESIM_MOCK_STATE`) is set, use it as [`Self::state_path`].
+    pub fn state_path_from_env(mut self) -> Self {
+        if let Ok(path) = std::env::var(MOCK_STATE_ENV) {
+            let path = path.trim();
+            if !path.is_empty() {
+                self.state_path = Some(PathBuf::from(path));
+            }
+        }
+        self
+    }
+
+    /// Start the mock server, loading persisted state when a path is configured.
+    pub async fn start(self) -> Result<MockOnlineSim> {
+        let state = match &self.state_path {
+            Some(path) => load_state_from_path(path)?,
+            None => MockState::fresh(),
+        };
+        let server = MockServer::start().await;
+        let state = Arc::new(Mutex::new(state));
+        let path = self.state_path.clone();
+        mount_handlers(&server, state.clone(), path.clone()).await;
+        Ok(MockOnlineSim {
+            server,
+            state,
+            state_path: path,
+        })
+    }
+}
+
+/// Local OnlineSim mock server.
+pub struct MockOnlineSim {
+    server: MockServer,
+    state: Arc<Mutex<MockState>>,
+    state_path: Option<PathBuf>,
+}
+
+impl Drop for MockOnlineSim {
+    fn drop(&mut self) {
+        if let Some(path) = &self.state_path {
+            let _ = persist_snapshot(path, &self.state);
+        }
+    }
+}
+
+impl MockOnlineSim {
+    /// Start a mock server with default balance `100` (ephemeral, in-memory only).
+    pub async fn start() -> Self {
+        Self::builder()
+            .start()
+            .await
+            .expect("ephemeral mock start cannot fail")
+    }
+
+    /// Builder for optional persistent state.
+    pub fn builder() -> MockOnlineSimBuilder {
+        MockOnlineSimBuilder::new()
+    }
+
+    /// Delete a persisted state file. Missing file is OK.
+    pub fn reset_state(path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(io_err(e)),
+        }
     }
 
     /// Base URL suitable for [`crate::ClientBuilder::base_url`] (ends with `/api/`).
@@ -169,11 +424,12 @@ impl MockOnlineSim {
 
     /// Set balance fields returned by `getBalance`.
     pub fn set_balance(&self, balance: f64, zbalance: f64, income: f64) {
-        let mut g = self.state.lock().expect("mock state");
-        g.balance = balance;
-        g.zbalance = zbalance;
-        g.income = income;
-        g.balance_error = None;
+        mutate_and_persist(&self.state, self.state_path.as_deref(), |g| {
+            g.balance = balance;
+            g.zbalance = zbalance;
+            g.income = income;
+            g.balance_error = None;
+        });
     }
 
     /// Next `getBalance` call returns the given API error code (once).
@@ -195,23 +451,37 @@ impl MockOnlineSim {
             .push(service.into());
     }
 
+    /// Configured persist path, if any.
+    pub fn state_path(&self) -> Option<&Path> {
+        self.state_path.as_deref()
+    }
+
     /// Raw wiremock URI (without `/api/`).
     pub fn uri(&self) -> String {
         self.server.uri()
     }
 }
 
-async fn mount_handlers(server: &MockServer, state: Arc<Mutex<MockState>>) {
+async fn mount_handlers(
+    server: &MockServer,
+    state: Arc<Mutex<MockState>>,
+    state_path: Option<PathBuf>,
+) {
+    let path = state_path.clone();
     Mock::given(method("GET"))
         .and(wiremock::matchers::path_regex(r"^/api/.*"))
         .respond_with(ApiResponder {
             state: state.clone(),
+            state_path: path.clone(),
         })
         .mount(server)
         .await;
     Mock::given(method("POST"))
         .and(wiremock::matchers::path_regex(r"^/api/.*"))
-        .respond_with(ApiResponder { state })
+        .respond_with(ApiResponder {
+            state,
+            state_path: path,
+        })
         .mount(server)
         .await;
 }
@@ -219,13 +489,13 @@ async fn mount_handlers(server: &MockServer, state: Arc<Mutex<MockState>>) {
 #[derive(Clone)]
 struct ApiResponder {
     state: Arc<Mutex<MockState>>,
+    state_path: Option<PathBuf>,
 }
 
 impl wiremock::Respond for ApiResponder {
     fn respond(&self, request: &Request) -> ResponseTemplate {
         let path = request.url.path();
         let path = path.strip_prefix('/').unwrap_or(path);
-        // Expect /api/<endpoint>.php or /api/<endpoint>
         let rest = path
             .strip_prefix("api/")
             .unwrap_or(path)
@@ -237,33 +507,44 @@ impl wiremock::Respond for ApiResponder {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
 
+        let persist = self.state_path.as_deref();
+
         let body = match rest {
             "getBalance" => handle_balance(&self.state),
             "getPrice" => handle_price(&self.state, &query),
-            "getNum" => handle_get_num(&self.state, &query),
-            "getState" => handle_get_state(&self.state, &query),
-            "setOperationOk" => handle_close(&self.state, &query),
-            "setOperationRevise" => handle_next(&self.state, &query),
+            "getNum" | "getNumRepeat" => {
+                mutate_and_persist(&self.state, persist, |g| handle_get_num_inner(g, &query))
+            }
+            "getState" => {
+                mutate_and_persist(&self.state, persist, |g| handle_get_state_inner(g, &query))
+            }
+            "setOperationOk" | "rent/closeRentNum" => {
+                mutate_and_persist(&self.state, persist, |g| handle_close_inner(g, &query))
+            }
+            "setOperationRevise" => {
+                mutate_and_persist(&self.state, persist, |g| handle_next_inner(g, &query))
+            }
             "getNumbersStats" => handle_tariffs(&query),
             "getProfile" => handle_profile(&self.state),
-            "profile" => handle_profile_save(&self.state, request),
+            "profile" => {
+                mutate_and_persist(&self.state, persist, |g| handle_profile_save_inner(g, request))
+            }
             "webhook-logs" => handle_webhook_logs(),
             "getPaymentHistory" => handle_payment_history(),
             "getFreeCountryList" => handle_free_countries(),
             "getFreePhoneList" => handle_free_numbers(&query),
             "getFreeMessageList" => handle_free_messages(),
             "getFreeList" => handle_free_list(),
-            "rent/getRentNum" => handle_rent_get(&self.state, &query),
+            "rent/getRentNum" | "rent/extendRentState" => {
+                mutate_and_persist(&self.state, persist, |g| handle_rent_get_inner(g, &query))
+            }
             "rent/getRentState" => handle_rent_state(&self.state, &query),
-            "rent/closeRentNum" => json!({ "response": "1" }),
             "rent/portReload" => json!({ "response": "1" }),
-            "rent/extendRentState" => handle_rent_get(&self.state, &query),
             "rent/tariffsRent" => handle_rent_tariffs(&query),
             "getService" => json!({ "response": "1", "service": ["telegram", "whatsapp"] }),
             "getServiceNumber" => {
                 json!({ "response": "1", "number": ["79001112233", "79001112234"] })
             }
-            "getNumRepeat" => handle_get_num(&self.state, &query),
             "pay/createEmpty" => json!({
                 "response": "1",
                 "payId": 1,
@@ -302,8 +583,7 @@ fn handle_price(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) 
     json!({ "response": "1", "price": price })
 }
 
-fn handle_get_num(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) -> Value {
-    let mut g = state.lock().expect("mock state");
+fn handle_get_num_inner(g: &mut MockState, query: &HashMap<String, String>) -> Value {
     let service = query
         .get("service")
         .cloned()
@@ -317,7 +597,7 @@ fn handle_get_num(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>
         .scripts
         .iter()
         .position(|s| s.service == service)
-        .or_else(|| if g.scripts.is_empty() { None } else { Some(0) });
+        .or(if g.scripts.is_empty() { None } else { Some(0) });
 
     let script = match script_idx {
         Some(i) => g.scripts.remove(i),
@@ -364,8 +644,7 @@ fn handle_get_num(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>
     }
 }
 
-fn handle_get_state(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) -> Value {
-    let mut g = state.lock().expect("mock state");
+fn handle_get_state_inner(g: &mut MockState, query: &HashMap<String, String>) -> Value {
     let tzid = query.get("tzid").and_then(|s| s.parse::<i64>().ok());
 
     let ids: Vec<i64> = match tzid {
@@ -409,12 +688,10 @@ fn handle_get_state(state: &Arc<Mutex<MockState>>, query: &HashMap<String, Strin
         return json!({ "response": "ERROR_NO_OPERATIONS" });
     }
 
-    // getState returns a bare array (JS client treats it as post-parsed body).
     Value::Array(list)
 }
 
-fn handle_close(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) -> Value {
-    let mut g = state.lock().expect("mock state");
+fn handle_close_inner(g: &mut MockState, query: &HashMap<String, String>) -> Value {
     if let Some(tzid) = query.get("tzid").and_then(|s| s.parse::<i64>().ok()) {
         if let Some(op) = g.ops.get_mut(&tzid) {
             op.closed = true;
@@ -424,8 +701,7 @@ fn handle_close(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) 
     json!({ "response": "ERROR_NO_TZID" })
 }
 
-fn handle_next(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) -> Value {
-    let g = state.lock().expect("mock state");
+fn handle_next_inner(g: &mut MockState, query: &HashMap<String, String>) -> Value {
     if let Some(tzid) = query.get("tzid").and_then(|s| s.parse::<i64>().ok()) {
         if g.ops.contains_key(&tzid) {
             return json!({ "response": "1", "tzid": tzid });
@@ -491,8 +767,7 @@ fn handle_profile(state: &Arc<Mutex<MockState>>) -> Value {
     })
 }
 
-fn handle_profile_save(state: &Arc<Mutex<MockState>>, request: &Request) -> Value {
-    let mut g = state.lock().expect("mock state");
+fn handle_profile_save_inner(g: &mut MockState, request: &Request) -> Value {
     if let Ok(value) = serde_json::from_slice::<Value>(&request.body) {
         if let Some(url) = value.pointer("/profile/webhook_url").and_then(|v| match v {
             Value::Null => Some(None),
@@ -619,8 +894,7 @@ fn handle_free_list() -> Value {
     })
 }
 
-fn handle_rent_get(state: &Arc<Mutex<MockState>>, query: &HashMap<String, String>) -> Value {
-    let mut g = state.lock().expect("mock state");
+fn handle_rent_get_inner(g: &mut MockState, query: &HashMap<String, String>) -> Value {
     let country: i64 = query
         .get("country")
         .and_then(|s| s.parse().ok())

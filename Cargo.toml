@@ -1,6 +1,6 @@
 [package]
 name = "onlinesim-rs-api"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.75"
 description = "Rust client for OnlineSim SMS API"
@@ -27,7 +27,7 @@ default = ["async"]
 async = ["dep:tokio"]
 blocking = ["reqwest/blocking"]
 # Built-in HTTP mock server for tests / local integration (implies async).
-mock = ["async", "dep:wiremock"]
+mock = ["async", "dep:wiremock", "dep:fs4"]
 
 [dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
@@ -36,10 +36,12 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["time", "sync", "rt"], optional = true }
 wiremock = { version = "0.6", optional = true }
+fs4 = { version = "0.13", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 serde_json = "1"
+tempfile = "3"
 
 [[test]]
 name = "api_mock"

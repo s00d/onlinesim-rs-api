@@ -228,3 +228,66 @@ fn blocking_client_uses_same_mock() {
         .unwrap();
     assert_eq!(code, "111222");
 }
+
+#[tokio::test]
+async fn persist_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mock-state.json");
+
+    let tzid = {
+        let mock = MockOnlineSim::builder()
+            .state_path(&path)
+            .start()
+            .await
+            .unwrap();
+        mock.set_balance(42.0, 1.0, 2.0);
+        mock.script_sms(SmsScript {
+            code: "777888".into(),
+            polls_before_code: 1,
+            ..SmsScript::default()
+        });
+        let client = mock.client().unwrap();
+        let tzid = client.numbers().get("telegram").await.unwrap();
+        // Advance polls once so restart must restore polls == 1.
+        let waiting = client.numbers().state_one(tzid).await.unwrap();
+        assert_eq!(waiting.response.as_deref(), Some("TZ_NUM_WAIT"));
+        assert!(path.is_file());
+        tzid
+        // Drop flushes.
+    };
+
+    let mock = MockOnlineSim::builder()
+        .state_path(&path)
+        .start()
+        .await
+        .unwrap();
+    let client = mock.client().unwrap();
+    assert_eq!(client.user().balance().await.unwrap().balance, 42.0);
+
+    let states = client
+        .numbers()
+        .state(1, "ASC", true, true, false)
+        .await
+        .unwrap();
+    assert!(
+        states.iter().any(|s| s.tzid == tzid),
+        "persisted tzid {tzid} missing after restart"
+    );
+
+    let code = client
+        .numbers()
+        .wait_code(
+            tzid,
+            WaitCodeOptions {
+                interval_secs: 0,
+                max_attempts: 5,
+                ..WaitCodeOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(code, "777888");
+
+    MockOnlineSim::reset_state(&path).unwrap();
+    assert!(!path.exists());
+}
