@@ -312,8 +312,8 @@ where
     T: Deserialize<'de>,
     D: Deserializer<'de>,
 {
-    use std::collections::HashMap;
     use serde::de::IntoDeserializer;
+    use std::collections::HashMap;
 
     let value = Value::deserialize(deserializer)?;
     match value {

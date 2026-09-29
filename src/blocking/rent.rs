@@ -100,7 +100,9 @@ impl RentApi {
 
     /// All rent tariffs.
     pub fn tariffs(&self) -> Result<HashMap<String, RentTariff>> {
-        let value: Value = self.http.get_onlinesim("rent/tariffsRent", json!({}), true)?;
+        let value: Value = self
+            .http
+            .get_onlinesim("rent/tariffsRent", json!({}), true)?;
         match value {
             Value::Array(a) if a.is_empty() => Ok(HashMap::new()),
             Value::Null => Ok(HashMap::new()),
@@ -115,9 +117,9 @@ impl RentApi {
 
     /// Rent tariff for an explicit country.
     pub fn tariffs_one_in(&self, country: i64) -> Result<RentTariff> {
-        let value: Value = self
-            .http
-            .get_onlinesim("rent/tariffsRent", json!({ "country": country }), true)?;
+        let value: Value =
+            self.http
+                .get_onlinesim("rent/tariffsRent", json!({ "country": country }), true)?;
         match value {
             Value::Array(_) | Value::Null => Err(Error::Unexpected(format!(
                 "no rent tariff for country {country}"

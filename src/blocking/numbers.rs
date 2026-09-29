@@ -8,10 +8,10 @@ use serde_json::{json, Value};
 
 use crate::config::DEFAULT_COUNTRY;
 use crate::error::{Error, Result};
-use crate::util::normalize_service;
 use crate::types::numbers::{
     GetNumberParams, NumberWithTz, StateOne, TariffCountryOne, WaitCodeOptions,
 };
+use crate::util::normalize_service;
 use crate::wait_code::blocking_poller::BlockingWaitPoller;
 
 use super::http::BlockingHttp;
