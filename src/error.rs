@@ -31,7 +31,7 @@ pub fn request_error_message(code: &str) -> &'static str {
             "delayed SMS reception is not possible at this interval of time"
         }
         "INTERVAL_CONCURRENT_REQUESTS_ERROR" => {
-            "maximum quantity of concurrent requests for number issue is exceeded, try again later"
+            "request frequency exceeded (setOperationOk: max once per 5s per tzid)"
         }
         "TRY_AGAIN_LATER" => "temporarily unable to perform the request",
         "NO_FORWARD_FOR_DEFFER" => "forwarding can be activated only for online reception",
@@ -100,5 +100,15 @@ impl Error {
         }
         let message = request_error_message(&code).to_string();
         Self::Request { code, message }
+    }
+
+    /// `ERROR_NO_OPERATIONS` — empty getState, not a hard failure for list calls.
+    pub fn is_no_operations(&self) -> bool {
+        matches!(self, Self::Request { code, .. } if code == "ERROR_NO_OPERATIONS")
+    }
+
+    /// Safe to retry after a short delay (`INTERVAL_CONCURRENT_REQUESTS_ERROR`).
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, Self::Request { code, .. } if code == "INTERVAL_CONCURRENT_REQUESTS_ERROR")
     }
 }

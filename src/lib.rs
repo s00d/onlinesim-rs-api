@@ -48,6 +48,7 @@
 mod builder;
 mod config;
 mod error;
+mod rate_limit;
 mod util;
 
 #[cfg(any(feature = "async", feature = "blocking"))]

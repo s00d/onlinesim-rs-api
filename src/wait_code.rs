@@ -211,6 +211,7 @@ pub mod async_poller {
 
             let states = match states {
                 Ok(s) => s,
+                Err(e) if e.is_no_operations() => Vec::new(),
                 Err(e) => {
                     fail_all(&inner, e);
                     return;
@@ -372,6 +373,7 @@ pub mod blocking_poller {
 
             let states = match states {
                 Ok(s) => s,
+                Err(e) if e.is_no_operations() => Vec::new(),
                 Err(e) => {
                     fail_all(&inner, e);
                     return;

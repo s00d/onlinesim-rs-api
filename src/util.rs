@@ -6,6 +6,11 @@ use std::fmt;
 
 use crate::error::{Error, Result};
 
+/// Strip `service_` prefix from tariff map keys (`service_twitter` → `twitter`).
+pub fn normalize_service(service: &str) -> &str {
+    service.strip_prefix("service_").unwrap_or(service)
+}
+
 /// Encode a serializable value as `application/x-www-form-urlencoded` query pairs.
 pub fn to_query_pairs(params: impl serde::Serialize) -> Result<Vec<(String, String)>> {
     let value = serde_json::to_value(params)?;

@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 use crate::config::DEFAULT_COUNTRY;
 use crate::error::{Error, Result};
+use crate::util::normalize_service;
 use crate::types::numbers::{
     GetNumberParams, NumberWithTz, StateOne, TariffCountryOne, WaitCodeOptions,
 };
@@ -74,6 +75,7 @@ impl NumbersApi {
             true,
         )?;
         match resp.price {
+            Value::Null => Ok("0".into()),
             Value::String(s) => Ok(s),
             Value::Number(n) => Ok(n.to_string()),
             other => Ok(other.to_string()),
@@ -87,10 +89,11 @@ impl NumbersApi {
 
     /// Order a number with explicit parameters.
     pub fn get_with(&self, params: GetNumberParams<'_>) -> Result<i64> {
+        let service = normalize_service(params.service);
         let resp: TzidResp = self.http.get_onlinesim(
             "getNum",
             json!({
-                "service": params.service,
+                "service": service,
                 "country": params.country,
                 "reject": params.reject,
                 "extension": params.extension,
@@ -107,10 +110,11 @@ impl NumbersApi {
 
     /// Order a number with explicit parameters and return enriched payload.
     pub fn get_with_number_params(&self, params: GetNumberParams<'_>) -> Result<NumberWithTz> {
+        let service = normalize_service(params.service);
         let resp: GetNumResp = self.http.get_onlinesim(
             "getNum",
             json!({
-                "service": params.service,
+                "service": service,
                 "country": params.country,
                 "reject": params.reject,
                 "extension": params.extension,
@@ -145,7 +149,7 @@ impl NumbersApi {
         repeat: bool,
     ) -> Result<Vec<StateOne>> {
         let type_ = if repeat { "repeat" } else { "index" };
-        self.http.get_onlinesim(
+        match self.http.get_onlinesim(
             "getState",
             json!({
                 "message_to_code": message_to_code,
@@ -155,7 +159,11 @@ impl NumbersApi {
                 "type": type_,
             }),
             true,
-        )
+        ) {
+            Ok(list) => Ok(list),
+            Err(e) if e.is_no_operations() => Ok(vec![]),
+            Err(e) => Err(e),
+        }
     }
 
     /// State for a single `tzid` with default flags.
@@ -184,7 +192,7 @@ impl NumbersApi {
         clean: bool,
         repeat: bool,
     ) -> Result<StateOne> {
-        let list: Vec<StateOne> = self.http.get_onlinesim(
+        let list: Vec<StateOne> = match self.http.get_onlinesim(
             "getState",
             json!({
                 "tzid": tzid,
@@ -194,10 +202,16 @@ impl NumbersApi {
                 "repeat": repeat,
             }),
             true,
-        )?;
+        ) {
+            Ok(list) => list,
+            Err(e) if e.is_no_operations() => {
+                return Err(Error::Unexpected(format!("no operation for tzid {tzid}")));
+            }
+            Err(e) => return Err(e),
+        };
         list.into_iter()
             .next()
-            .ok_or_else(|| Error::Unexpected("empty getState response".into()))
+            .ok_or_else(|| Error::Unexpected(format!("no operation for tzid {tzid}")))
     }
 
     /// Request next SMS.

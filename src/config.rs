@@ -3,7 +3,9 @@
 /// Default OnlineSim API base URL.
 pub const DEFAULT_BASE_URL: &str = "https://onlinesim.host/api/";
 
-/// Default country dial code used by API helpers.
+/// Default country dial code used by API helpers (USA).
+///
+/// Country `7` (RU) is unavailable / banned for typical API keys — do not use it as default.
 pub const DEFAULT_COUNTRY: i64 = 1;
 
 /// Browser-like User-Agent used by the JS client.
@@ -22,6 +24,8 @@ pub struct Config {
     pub oauth: Option<String>,
     /// OnlineSim API base URL.
     pub base_url: String,
+    /// Client-side pacing (1 rps + 5s for `setOperationOk`). Disable for mock/tests.
+    pub rate_limit: bool,
 }
 
 impl Default for Config {
@@ -32,6 +36,7 @@ impl Default for Config {
             dev_id: None,
             oauth: None,
             base_url: DEFAULT_BASE_URL.to_string(),
+            rate_limit: true,
         }
     }
 }

@@ -45,6 +45,12 @@ impl ClientBuilder {
         self
     }
 
+    /// Disable client-side rate limiting (for mock / local tests).
+    pub fn disable_rate_limit(mut self) -> Self {
+        self.config.rate_limit = false;
+        self
+    }
+
     /// Build an async [`crate::Client`].
     #[cfg(feature = "async")]
     pub fn build(self) -> Result<crate::Client> {

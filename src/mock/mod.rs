@@ -416,6 +416,7 @@ impl MockOnlineSim {
         Client::builder()
             .apikey("mock-key")
             .base_url(self.base_url())
+            .disable_rate_limit()
             .build()
     }
 
@@ -425,6 +426,7 @@ impl MockOnlineSim {
         crate::ClientBuilder::new()
             .apikey("mock-key")
             .base_url(self.base_url())
+            .disable_rate_limit()
             .build_blocking()
     }
 
