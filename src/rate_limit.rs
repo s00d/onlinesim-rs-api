@@ -50,84 +50,66 @@ impl RateLimiter {
     }
 
     /// Block until the next slot for `path` is free.
-    pub fn wait(&self, path: &str) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
-        }
-        let sleep_for = {
-            let mut g = self.inner.lock().map_err(|_| {
-                Error::Unexpected("rate limiter poisoned".into())
-            })?;
-            let now = Instant::now();
-            let mut wait_until = now;
-
-            if let Some(last) = g.last_global {
-                let t = last + GLOBAL_INTERVAL;
-                if t > wait_until {
-                    wait_until = t;
-                }
+    #[cfg(feature = "blocking")]
+    pub(crate) fn wait(&self, path: &str) -> Result<()> {
+        self.wait_inner(path, |d| {
+            if !d.is_zero() {
+                std::thread::sleep(d);
             }
-            if path == "setOperationOk" {
-                if let Some(last) = g.last_path.get(path) {
-                    let t = *last + OP_OK_INTERVAL;
-                    if t > wait_until {
-                        wait_until = t;
-                    }
-                }
-            }
-
-            let delay = wait_until.saturating_duration_since(now);
-            // Reserve slot before sleeping so concurrent waiters queue.
-            g.last_global = Some(wait_until);
-            if path == "setOperationOk" {
-                g.last_path.insert(path.to_string(), wait_until);
-            }
-            delay
-        };
-        if !sleep_for.is_zero() {
-            std::thread::sleep(sleep_for);
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Async wait (uses `tokio::time::sleep` when the `async` feature is on).
     #[cfg(feature = "async")]
-    pub async fn wait_async(&self, path: &str) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
-        }
-        let sleep_for = {
-            let mut g = self.inner.lock().map_err(|_| {
-                Error::Unexpected("rate limiter poisoned".into())
-            })?;
-            let now = Instant::now();
-            let mut wait_until = now;
-
-            if let Some(last) = g.last_global {
-                let t = last + GLOBAL_INTERVAL;
-                if t > wait_until {
-                    wait_until = t;
-                }
-            }
-            if path == "setOperationOk" {
-                if let Some(last) = g.last_path.get(path) {
-                    let t = *last + OP_OK_INTERVAL;
-                    if t > wait_until {
-                        wait_until = t;
-                    }
-                }
-            }
-
-            let delay = wait_until.saturating_duration_since(now);
-            g.last_global = Some(wait_until);
-            if path == "setOperationOk" {
-                g.last_path.insert(path.to_string(), wait_until);
-            }
-            delay
-        };
+    pub(crate) async fn wait_async(&self, path: &str) -> Result<()> {
+        let sleep_for = self.reserve(path)?;
         if !sleep_for.is_zero() {
             tokio::time::sleep(sleep_for).await;
         }
         Ok(())
+    }
+
+    fn reserve(&self, path: &str) -> Result<Duration> {
+        if !self.enabled {
+            return Ok(Duration::ZERO);
+        }
+        let mut g = self
+            .inner
+            .lock()
+            .map_err(|_| Error::Unexpected("rate limiter poisoned".into()))?;
+        let now = Instant::now();
+        let mut wait_until = now;
+
+        if let Some(last) = g.last_global {
+            let t = last + GLOBAL_INTERVAL;
+            if t > wait_until {
+                wait_until = t;
+            }
+        }
+        if path == "setOperationOk" {
+            if let Some(last) = g.last_path.get(path) {
+                let t = *last + OP_OK_INTERVAL;
+                if t > wait_until {
+                    wait_until = t;
+                }
+            }
+        }
+
+        let delay = wait_until.saturating_duration_since(now);
+        g.last_global = Some(wait_until);
+        if path == "setOperationOk" {
+            g.last_path.insert(path.to_string(), wait_until);
+        }
+        Ok(delay)
+    }
+
+    #[cfg(feature = "blocking")]
+    fn wait_inner<F>(&self, path: &str, sleep: F) -> Result<()>
+    where
+        F: FnOnce(Duration) -> Result<()>,
+    {
+        let delay = self.reserve(path)?;
+        sleep(delay)
     }
 }
