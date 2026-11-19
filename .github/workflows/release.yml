@@ -1,0 +1,62 @@
+name: release
+
+# Push a version tag (vX.Y.Z) to run the full CI, publish to crates.io and create the GitHub release.
+# crates.io trusted publishing (OIDC): no long-lived token. The registry pins this file name and the
+# `release` environment.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Tag matches Cargo.toml version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      # Clean checkout: no --allow-dirty.
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "release $TAG exists, skipping"
+            exit 0
+          fi
+          version="${TAG#v}"
+          awk -v head="## [$version]" '$0 == head { found = 1; next } found && /^## / { exit } found { print }' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::no '## [$version]' section in CHANGELOG.md"
+            exit 1
+          fi
+          gh release create "$TAG" --title "$TAG" --latest --notes-file release-notes.md

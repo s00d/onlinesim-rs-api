@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.1]
+
+### Added
+
+- `mock::MockOnlineSim` is now an in-process fake of the OnlineSim API: `MockOnlineSim::new(MockOptions)` / `default()`, no server, no sockets, no runtime needed. `client()` / `client_blocking()` return normal clients wired to it; `transport()` is the `MockTransport` (`Transport` + `BlockingTransport`) for clients you build yourself; `builder()` a `ClientBuilder` with the mock's key. It answers every endpoint the SDK calls like the real backend (HTTP 456 for a wrong key, string/int `response`, decimal-string money, `[]` for empty maps) and keeps balance, frozen sums, operations, rents, webhook URL and webhook log. Deterministic: counter-based ids and numbers, fixed-epoch timestamps.
+- Mock control API shared with the other OnlineSim SDKs: `add_sms` / `add_sms_from`, `add_sms_after` / `add_sms_after_from` (lets `wait_code` run with a zero interval), `fail_next_on(endpoint, code)`, `fail_next_transport(status)` / `fail_next_transport_on`, `balance()`, `operations()`, `rents()`, `requests()`, `reset()`, `MockOptions` (`api_key`, `balance`, `prices`, `rent_tariffs`, `guard_interval`), `mock::extract_code`, `MOCK_BASE_URL`. See the [testing guide](https://s00d.github.io/onlinesim-rs-api/testing).
+- Feature `mock-transport`: the in-process mock without extra dependencies, for the async or the blocking client. Feature `mock` now means `mock-transport` plus `MockOnlineSim::start()` / `start_with(options)`, the same state served over local HTTP (wiremock).
+- CI: `cargo package --list` check, clippy for every feature combination (`cargo hack --feature-powerset`), `cargo deny check`, a smoke job that packages the crate, unpacks the `.crate` into an empty project and runs the README "Testing" example; a `release.yml` workflow (crates.io trusted publishing).
+
+### Changed
+
+- The mock follows the shared mock spec: default prices `{7: {vkcom: 0.5, telegram: 1.2, google: 0.3}, 44: {google: 0.2, vkcom: 0.36}}` instead of 0.5 for anything, numbers `+<country>9000000NN` and tzids from 1, the key must match `api_key` (`mock-key`), no SMS arrives unless added (0.2.0 sent `123456` to unscripted orders), close without an SMS refunds the price, unknown paths are a non-JSON 404. `fail_next` queues instead of replacing. `set_balance(balance, zbalance)` keeps its signature; `zbalance` is now added to the prices frozen by open operations. `script_sms` and `fail_no_number` still work.
+
 ## [0.2.0]
 
 A rewrite aligned with the shared OnlineSim SDK contract. The public API changed; see the

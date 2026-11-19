@@ -1,0 +1,32 @@
+# cargo deny check — run by CI on every feature (`all-features`).
+[graph]
+all-features = true
+
+[advisories]
+# RustSec database; any vulnerability or yanked crate fails the check.
+yanked = "deny"
+
+[licenses]
+# Every license in the dependency tree is permissive; anything new must be reviewed here.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Unlicense",
+]
+
+[bans]
+# Duplicate versions (base64, syn) come from upstream crates (reqwest, wiremock, wasm-bindgen), not from
+# this crate's own requirements; there is nothing to fix here.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

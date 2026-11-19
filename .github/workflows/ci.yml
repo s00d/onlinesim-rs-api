@@ -4,6 +4,11 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # release.yml runs the whole CI before publishing.
+  workflow_call:
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,6 +31,7 @@ jobs:
       - run: cargo test --all-features
       - run: cargo test --no-default-features
       - run: cargo test --no-default-features --features blocking
+      - run: cargo test --no-default-features --features blocking,mock-transport
 
   lint:
     runs-on: ubuntu-latest
@@ -34,13 +40,39 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo clippy --all-targets --no-default-features -- -D warnings
-      - run: cargo clippy --all-targets --no-default-features --features blocking -- -D warnings
+      # Every combination of async / blocking / mock-transport / mock.
+      - run: cargo hack clippy --feature-powerset --all-targets -- -D warnings
       - run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
       # Compiles every Rust example of README.md and docs/content/*.md against the crate.
       - run: cargo test --all-features --test docs_examples -- --ignored
+      # Clean checkout: no --allow-dirty.
       - run: cargo publish --dry-run
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Advisories (RustSec), licenses, bans and sources per deny.toml.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # Package the crate, check its file list, unpack the .crate into an empty project and run the README
+  # "Testing" example against MockOnlineSim, on the MSRV and on stable.
+  smoke:
+    name: smoke from artifact (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: ['1.85', stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      - run: tests/smoke-artifact.sh

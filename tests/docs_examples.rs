@@ -1,6 +1,7 @@
 //! Compiles the Rust examples of README.md and docs/content/*.md against the crate, so the docs cannot drift
 //! from the API. A ```rust block counts as an example when it uses `client`, starts with `use` or has a
-//! `fn main`; the other rust blocks are signatures. Examples without `fn main` become the body of
+//! `fn main`; the other rust blocks are signatures. Examples with `fn main` or `#[tokio::test]` become a
+//! module; the others become the body of
 //! `async fn(client: &Client, tzid: i64) -> Result<()>`.
 //!
 //! Slow (builds a separate crate), so ignored by default: `cargo test --test docs_examples -- --ignored`.
@@ -56,7 +57,7 @@ fn docs_examples_compile() {
         "#![allow(unused, clippy::all)]\nuse onlinesim_rs_api::*;\nuse onlinesim_rs_api::types::*;\nuse std::collections::HashMap;\n",
     );
     for (i, (source, code)) in examples.iter().enumerate() {
-        if code.contains("fn main") {
+        if code.contains("fn main") || code.contains("#[tokio::test]") {
             writeln!(lib, "// {source}\nmod ex_{i} {{\nuse super::*;\n{code}\n}}").unwrap();
         } else {
             writeln!(
@@ -83,7 +84,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-onlinesim-rs-api = {{ path = {root:?}, features = ["async", "blocking"] }}
+onlinesim-rs-api = {{ path = {root:?}, features = ["async", "blocking", "mock-transport"] }}
 serde_json = "1"
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 
