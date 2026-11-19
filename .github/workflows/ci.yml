@@ -1,4 +1,4 @@
-name: CI
+name: ci
 
 on:
   push:
@@ -10,19 +10,37 @@ env:
 
 jobs:
   test:
+    name: test (${{ matrix.rust }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.85 = rust-version in Cargo.toml (reqwest 0.13 and tokio need it).
+        rust: ['1.85', stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+      # No committed Cargo.lock: edition 2024 resolves dependency versions that support rust-version.
+      - run: cargo test --all-features
+      - run: cargo test --no-default-features
+      - run: cargo test --no-default-features --features blocking
+
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: fmt
-        run: cargo fmt --all -- --check
-      - name: clippy
-        run: cargo clippy --all-targets --features "async,blocking,mock" -- -D warnings
-      - name: test (published mock)
-        run: cargo test --features "async,blocking,mock"
-      - name: test async without mock (unit only)
-        run: cargo test --no-default-features --features async --test error_and_types
-      - name: publish dry-run
-        run: cargo publish --dry-run --allow-dirty
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --all-targets --no-default-features -- -D warnings
+      - run: cargo clippy --all-targets --no-default-features --features blocking -- -D warnings
+      - run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # Compiles every Rust example of README.md and docs/content/*.md against the crate.
+      - run: cargo test --all-features --test docs_examples -- --ignored
+      - run: cargo publish --dry-run

@@ -1,62 +1,78 @@
 [package]
 name = "onlinesim-rs-api"
-version = "0.1.4"
-edition = "2021"
-rust-version = "1.89"
-description = "Rust client for OnlineSim SMS API"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Typed async and blocking Rust client for the OnlineSim SMS API"
 license = "Apache-2.0"
 authors = ["s00d"]
 repository = "https://github.com/s00d/onlinesim-rs-api"
-homepage = "https://github.com/s00d/onlinesim-rs-api"
 documentation = "https://docs.rs/onlinesim-rs-api"
 readme = "README.md"
 keywords = ["onlinesim", "sms", "api", "client"]
 categories = ["api-bindings", "asynchronous", "web-programming::http-client"]
-include = [
-    "src/**/*",
-    "examples/**/*",
-    "tests/**/*",
-    "assets/**/*",
-    "LICENSE",
-    "README.md",
-    "Cargo.toml",
-]
+include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md", "Cargo.toml"]
 
 [features]
 default = ["async"]
-async = ["dep:tokio"]
-blocking = ["reqwest/blocking"]
-# Built-in HTTP mock server for tests / local integration (implies async).
+# Async `Client` (reqwest + tokio).
+async = ["dep:reqwest", "dep:tokio"]
+# Blocking `blocking::Client`.
+blocking = ["dep:reqwest", "reqwest/blocking"]
+# `mock::MockOnlineSim`: a local fake OnlineSim server for your own tests (implies `async`).
 mock = ["async", "dep:wiremock"]
 
 [dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["time", "sync", "rt"], optional = true }
-wiremock = { version = "0.6", optional = true }
+tokio = { version = "1", features = ["time"], optional = true }
+# 0.6.5 uses let chains (Rust 1.88) without declaring a rust-version.
+wiremock = { version = ">=0.6, <0.6.5", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-serde_json = "1"
-tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [[test]]
-name = "api_mock"
-required-features = ["mock"]
-
-[[example]]
-name = "get_balance"
+name = "client"
 required-features = ["async"]
 
-[[example]]
-name = "wait_sms"
+[[test]]
+name = "numbers"
 required-features = ["async"]
 
+[[test]]
+name = "rent"
+required-features = ["async"]
+
+[[test]]
+name = "user"
+required-features = ["async"]
+
+[[test]]
+name = "free"
+required-features = ["async"]
+
+[[test]]
+name = "wait"
+required-features = ["async"]
+
+[[test]]
+name = "integration"
+required-features = ["async"]
+
+[[test]]
+name = "mock"
+required-features = ["mock", "blocking"]
+
+[[test]]
+name = "blocking"
+required-features = ["blocking"]
+
 [[example]]
-name = "mock_sms_flow"
-required-features = ["mock"]
+name = "receive_sms"
+required-features = ["async"]
 
 [package.metadata.docs.rs]
 all-features = true
