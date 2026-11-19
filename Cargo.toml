@@ -11,7 +11,8 @@ documentation = "https://docs.rs/onlinesim-rs-api"
 readme = "README.md"
 keywords = ["onlinesim", "sms", "api", "client"]
 categories = ["api-bindings", "asynchronous", "web-programming::http-client"]
-include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md", "Cargo.toml"]
+# Anchored with "/": unanchored patterns match at any depth (docs/node_modules/**/README.md).
+include = ["/src/**/*", "/LICENSE", "/README.md", "/CHANGELOG.md", "/Cargo.toml"]
 
 [features]
 default = ["async"]
