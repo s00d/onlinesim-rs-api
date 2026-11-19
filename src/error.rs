@@ -1,114 +1,126 @@
-//! Error types for the OnlineSim client.
+//! Errors of the SDK.
 
-use thiserror::Error;
-
-/// Look up a human-readable message for an OnlineSim API error code.
-pub fn request_error_message(code: &str) -> &'static str {
-    match code {
-        "ACCOUNT_BLOCKED" => "account blocked",
-        "ERROR_WRONG_KEY" => "wrong apikey",
-        "ERROR_NO_KEY" => "no apikey",
-        "ERROR_NO_SERVICE" => "service not specified",
-        "REQUEST_NOT_FOUND" => "API method not specified",
-        "API_ACCESS_DISABLED" => "api disabled",
-        "API_ACCESS_IP" => "access from this ip is disabled in the profile",
-        "WARNING_NO_NUMS" => "no matching numbers",
-        "TZ_INPOOL" => "waiting for a number to be dedicated to the operation",
-        "TZ_NUM_WAIT" => "waiting for response",
-        "TZ_NUM_ANSWER" => "response has arrived",
-        "TZ_OVER_EMPTY" => "response did not arrive within the specified time",
-        "TZ_OVER_OK" => "operation has been completed",
-        "ERROR_NO_TZID" => "tzid is not specified",
-        "ERROR_NO_OPERATIONS" => "no operations",
-        "ACCOUNT_IDENTIFICATION_REQUIRED" => {
-            "You have to go through an identification process: to order a messenger - in any way, for forward - on the passport."
-        }
-        "EXCEEDED_CONCURRENT_OPERATIONS" => {
-            "maximum quantity of numbers booked concurrently is exceeded for your account"
-        }
-        "NO_NUMBER" => "temporarily no numbers available for the selected service",
-        "TIME_INTERVAL_ERROR" => {
-            "delayed SMS reception is not possible at this interval of time"
-        }
-        "INTERVAL_CONCURRENT_REQUESTS_ERROR" => {
-            "request frequency exceeded (setOperationOk: max once per 5s per tzid)"
-        }
-        "TRY_AGAIN_LATER" => "temporarily unable to perform the request",
-        "NO_FORWARD_FOR_DEFFER" => "forwarding can be activated only for online reception",
-        "NO_NUMBER_FOR_FORWARD" => "there are no numbers for forwarding",
-        "ERROR_LENGTH_NUMBER_FOR_FORWARD" => "wrong length of the number for forwarding",
-        "DUPLICATE_OPERATION" => "adding operations with identical parameters",
-        "ERROR_NO_NUMBER" => "number is not specified",
-        "ERROR_PARAMS" => "one or both parameters are wrong",
-        "LIFICYCLE_NUM_EXPIRED" => "the number has expired",
-        "NEED_EXTENSION_NUMBER" => "you have to extend the number, see the Extension tab",
-        "ERROR_NUMBERS_PARAMS" => "error in the number format",
-        "ERROR_WRONG_TZID" => "error in the number format",
-        "NO_COMPLETE_TZID" => "unable to complete the operation.",
-        "NO_CONFIRM_FORWARD" => "unable to confirm forwarding",
-        "ERROR_NO_SERVICE_REPEAT" => "no services for repeated reception",
-        "SERVICE_TO_NUMBER_EMPTY" => "no numbers for repeated reception for this service",
-        _ => "unknown API error",
-    }
-}
-
-/// Crate-wide result type.
+/// Result of every SDK call.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Errors returned by the client.
-#[derive(Debug, Error)]
+/// Every error the SDK returns.
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// No numbers available (`NO_NUMBER` / `NO_NUMBER_FOR_FORWARD`).
-    #[error("no number available: {code}")]
-    NoNumber {
-        /// API error code.
-        code: String,
-    },
+    /// The API answered with an error code in `response`.
+    #[error(transparent)]
+    Api(#[from] ApiError),
 
-    /// OnlineSim API returned a non-success `response` code.
-    #[error("{message} ({code})")]
-    Request {
-        /// API error code.
-        code: String,
-        /// Human-readable message when known.
+    /// Network failure, request timeout, an HTTP error without an API code, or a body that is not JSON.
+    #[error("{message}")]
+    Transport {
+        /// What went wrong.
         message: String,
+        /// HTTP status; `None` when no response arrived (network error, timeout).
+        status: Option<u16>,
+        /// Start of the response body (up to 500 chars), empty when none.
+        body: String,
     },
 
-    /// `wait_code` exceeded the configured attempt limit.
-    #[error("timeout waiting for SMS code")]
-    Timeout,
+    /// `wait_code` gave up: no code arrived within its `timeout`.
+    #[error("{0}")]
+    Timeout(String),
 
-    /// HTTP transport or status error.
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
+    /// The JSON does not have the expected shape (also: a webhook body that is not a JSON object).
+    #[error("invalid response: {0}")]
+    Decode(String),
 
-    /// JSON encode/decode failure.
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-
-    /// Unexpected response shape.
-    #[error("unexpected response: {0}")]
-    Unexpected(String),
+    /// The client could not be built (bad base URL, TLS backend failed to start).
+    #[error("invalid configuration: {0}")]
+    Config(String),
 }
 
 impl Error {
-    /// Map an OnlineSim `response` field value to an error.
-    pub fn from_api_code(code: impl Into<String>) -> Self {
-        let code = code.into();
-        if code == "NO_NUMBER" || code == "NO_NUMBER_FOR_FORWARD" {
-            return Self::NoNumber { code };
+    /// The API error code (`ERROR_WRONG_KEY`, `NO_NUMBER`, …) when this is [`Error::Api`].
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Api(e) => Some(&e.code),
+            _ => None,
         }
-        let message = request_error_message(&code).to_string();
-        Self::Request { code, message }
     }
 
-    /// `ERROR_NO_OPERATIONS` — empty getState, not a hard failure for list calls.
-    pub fn is_no_operations(&self) -> bool {
-        matches!(self, Self::Request { code, .. } if code == "ERROR_NO_OPERATIONS")
+    /// No number is available right now (`NO_NUMBER`, `NO_NUMBER_FOR_FORWARD`).
+    pub fn is_no_number(&self) -> bool {
+        matches!(self, Self::Api(e) if e.is_no_number())
     }
 
-    /// Safe to retry after a short delay (`INTERVAL_CONCURRENT_REQUESTS_ERROR`).
-    pub fn is_temporary(&self) -> bool {
-        matches!(self, Self::Request { code, .. } if code == "INTERVAL_CONCURRENT_REQUESTS_ERROR")
+    #[cfg(any(feature = "async", feature = "blocking"))]
+    pub(crate) fn transport(message: impl Into<String>, status: Option<u16>, body: &str) -> Self {
+        Self::Transport {
+            message: message.into(),
+            status,
+            body: body.chars().take(BODY_EXCERPT).collect(),
+        }
     }
+}
+
+#[cfg(any(feature = "async", feature = "blocking"))]
+const BODY_EXCERPT: usize = 500;
+
+/// An error code from the API, with a readable message.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message} ({code})")]
+pub struct ApiError {
+    /// Raw error code, e.g. `ERROR_WRONG_KEY`.
+    pub code: String,
+    /// The server's `message`, else the [`error_message`] fallback, else the code itself.
+    pub message: String,
+}
+
+impl ApiError {
+    /// Error for `code`, with the server `message` when it says more than the code.
+    pub fn new(code: impl Into<String>, message: Option<&str>) -> Self {
+        let code = code.into();
+        let message = match message {
+            // Debug backends echo the code as `message`; prefer the readable fallback then.
+            Some(m) if !m.is_empty() && m != code => m.to_string(),
+            _ => error_message(&code).map_or_else(|| code.clone(), str::to_string),
+        };
+        Self { code, message }
+    }
+
+    /// `NO_NUMBER` or `NO_NUMBER_FOR_FORWARD`: retry later or pick another country.
+    pub fn is_no_number(&self) -> bool {
+        self.code == "NO_NUMBER" || self.code == "NO_NUMBER_FOR_FORWARD"
+    }
+}
+
+/// Fallback message for an error code the server sent without a `message`.
+pub fn error_message(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "ACCOUNT_BLOCKED" => "Account is blocked",
+        "ERROR_WRONG_KEY" => "Wrong API key",
+        "ERROR_NO_KEY" => "API key is missing",
+        "ERROR_NO_SERVICE" => "Service is not specified",
+        "API_ACCESS_DISABLED" => "API access is disabled in the profile",
+        "API_ACCESS_IP" => "API access from this IP is not allowed in the profile",
+        "ERROR_NO_TZID" => "tzid is not specified",
+        "ERROR_WRONG_TZID" => "Wrong tzid",
+        "ERROR_NO_OPERATIONS" => "No operations",
+        "NO_NUMBER" => "No numbers available for this service right now",
+        "NO_NUMBER_FOR_FORWARD" => "No numbers available for forwarding",
+        "NO_COUNTRY" => "Country not found",
+        "UNDEFINED_COUNTRY" => "Unknown country",
+        "WARNING_LOW_BALANCE" => "Not enough balance",
+        "EXCEEDED_CONCURRENT_OPERATIONS" => "Too many concurrent operations for this account",
+        "INTERVAL_CONCURRENT_REQUESTS_ERROR" => {
+            "Too many concurrent requests, try again in a few seconds"
+        }
+        "TRY_AGAIN_LATER" => "Temporarily unable to perform the request, try again later",
+        "ACCOUNT_IDENTIFICATION_REQUIRED" => "Account identification is required",
+        "ERROR_PARAMS" => "Wrong parameters",
+        "API_DISABLED" => "API is disabled",
+        "NO_COMPLETE_TZID" => "The operation cannot be closed yet",
+        "NO_CLOSE_RENT_US" => "US rent numbers cannot be closed early",
+        "UNDEFINED_DAYS" => "Unknown rent period",
+        "VALIDATION_ERROR" => "Validation failed",
+        "TZ_OVER_OK" => "Operation finished without a new code",
+        "ERROR_NO_ITEMS" => "Operation failed",
+        "" => "Empty error code",
+        _ => return None,
+    })
 }

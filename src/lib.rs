@@ -1,42 +1,27 @@
-//! Rust client for [OnlineSim](https://onlinesim.io) SMS API.
+//! Typed Rust client for the [OnlineSim](https://onlinesim.io) API: SMS numbers, rent, account and free
+//! numbers. Docs: <https://s00d.github.io/onlinesim-rs-api/>.
 //!
 //! # Features
 //!
-//! - `async` (default) — async [`Client`] based on `reqwest` + `tokio`
-//! - `blocking` — synchronous [`blocking::Client`]
-//! - `mock` — built-in [`mock::MockOnlineSim`] HTTP server for tests (no real numbers)
-//!
-//! Incoming SMS webhooks: [`WebhookPayload`] / [`parse_webhook_json`]; configure the URL
-//! with `client.user().set_webhook_url(...)` and inspect delivery via `webhook_logs`.
+//! - `async` (default): [`Client`] on `reqwest` + `tokio`.
+//! - `blocking`: [`blocking::Client`], the same methods without `.await`.
+//! - `mock`: [`mock::MockOnlineSim`], a local fake OnlineSim server for your own tests.
 //!
 //! # Example
 //!
 //! ```no_run
 //! # #[cfg(feature = "async")]
 //! # async fn demo() -> onlinesim_rs_api::Result<()> {
-//! use onlinesim_rs_api::Client;
+//! use onlinesim_rs_api::{Client, WaitCodeOptions};
 //!
-//! let client = Client::new("your-apikey")?;
+//! let client = Client::new("your-api-key")?;
 //! let balance = client.user().balance().await?;
-//! println!("balance = {}", balance.balance);
-//! # Ok(())
-//! # }
-//! ```
+//! println!("available: {} USD", balance.balance - balance.zbalance);
 //!
-//! # Testing without real numbers
-//!
-//! ```no_run
-//! # #[cfg(feature = "mock")]
-//! # async fn demo() -> onlinesim_rs_api::Result<()> {
-//! use onlinesim_rs_api::mock::{MockOnlineSim, SmsScript};
-//! use onlinesim_rs_api::WaitCodeOptions;
-//!
-//! let mock = MockOnlineSim::start().await;
-//! mock.script_sms(SmsScript { code: "999111".into(), ..SmsScript::default() });
-//! let client = mock.client()?;
-//! let tzid = client.numbers().get("telegram").await?;
-//! let code = client.numbers().wait_code(tzid, WaitCodeOptions { interval_secs: 0, ..Default::default() }).await?;
-//! assert_eq!(code, "999111");
+//! let order = client.numbers().get_with_number("google", 44, &[]).await?;
+//! println!("enter {} in the app", order.number);
+//! let code = client.numbers().wait_code(order.tzid, WaitCodeOptions::default()).await?;
+//! println!("code: {code}");
 //! # Ok(())
 //! # }
 //! ```
@@ -45,23 +30,40 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-mod builder;
-mod config;
+mod de;
 mod error;
-mod rate_limit;
-mod util;
+mod webhook;
 
-#[cfg(any(feature = "async", feature = "blocking"))]
-mod wait_code;
+/// Modules that need a client (feature `async` or `blocking`).
+macro_rules! with_client {
+    ($($item:item)*) => { $( #[cfg(any(feature = "async", feature = "blocking"))] $item )* };
+}
 
-#[cfg(feature = "async")]
-mod api;
-#[cfg(feature = "async")]
-mod client;
-#[cfg(feature = "async")]
-mod http;
+with_client! {
+    #[macro_use]
+    mod section;
+
+    mod client;
+    mod free;
+    mod numbers;
+    mod rent;
+    mod transport;
+    mod user;
+    mod wait;
+    mod wire;
+
+    pub use client::ClientBuilder;
+    pub use free::{Free, FreeListOptions};
+    pub use numbers::{Numbers, OrderBy, StateOneOptions, StateOptions};
+    pub use rent::Rent;
+    pub use transport::{BlockingTransport, BoxFuture, HttpRequest, HttpResponse, Method, Transport};
+    pub use user::User;
+    pub use wait::{Clock, SystemClock, WaitCodeOptions};
+    pub use wire::{DEFAULT_BASE_URL, DEFAULT_TIMEOUT};
+}
 
 #[cfg(feature = "blocking")]
+#[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 pub mod blocking;
 
 #[cfg(feature = "mock")]
@@ -70,11 +72,7 @@ pub mod mock;
 
 pub mod types;
 
-pub use builder::ClientBuilder;
-pub use config::{Config, DEFAULT_BASE_URL, DEFAULT_COUNTRY};
-pub use error::{request_error_message, Error, Result};
-pub use types::numbers::{GetNumberParams, WaitCodeOptions};
-pub use types::webhook::{parse_webhook_json, WebhookPayload, WebhookType};
-
 #[cfg(feature = "async")]
 pub use client::Client;
+pub use error::{ApiError, Error, Result, error_message};
+pub use webhook::{WebhookPayload, parse_webhook, parse_webhook_value};
