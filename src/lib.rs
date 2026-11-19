@@ -5,7 +5,9 @@
 //!
 //! - `async` (default): [`Client`] on `reqwest` + `tokio`.
 //! - `blocking`: [`blocking::Client`], the same methods without `.await`.
-//! - `mock`: [`mock::MockOnlineSim`], a local fake OnlineSim server for your own tests.
+//! - `mock-transport`: [`mock::MockOnlineSim`], an in-process fake OnlineSim API for your own tests (no extra
+//!   dependencies; use it with `async` or `blocking`).
+//! - `mock`: `mock-transport` plus [`mock::MockOnlineSim::start`], the same fake over local HTTP (wiremock).
 //!
 //! # Example
 //!
@@ -66,8 +68,11 @@ with_client! {
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 pub mod blocking;
 
-#[cfg(feature = "mock")]
-#[cfg_attr(docsrs, doc(cfg(feature = "mock")))]
+#[cfg(all(
+    feature = "mock-transport",
+    any(feature = "async", feature = "blocking")
+))]
+#[cfg_attr(docsrs, doc(cfg(feature = "mock-transport")))]
 pub mod mock;
 
 pub mod types;

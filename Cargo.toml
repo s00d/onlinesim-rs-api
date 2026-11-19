@@ -1,6 +1,6 @@
 [package]
 name = "onlinesim-rs-api"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Typed async and blocking Rust client for the OnlineSim SMS API"
@@ -20,8 +20,11 @@ default = ["async"]
 async = ["dep:reqwest", "dep:tokio"]
 # Blocking `blocking::Client`.
 blocking = ["dep:reqwest", "reqwest/blocking"]
-# `mock::MockOnlineSim`: a local fake OnlineSim server for your own tests (implies `async`).
-mock = ["async", "dep:wiremock"]
+# `mock::MockOnlineSim`: an in-process fake OnlineSim API (a `Transport` / `BlockingTransport`) for your own
+# tests. No extra dependencies; needs `async` or `blocking` for a client.
+mock-transport = []
+# `mock-transport` plus `MockOnlineSim::start()`, the same fake served over local HTTP (wiremock; implies `async`).
+mock = ["async", "mock-transport", "dep:wiremock"]
 
 [dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
@@ -65,6 +68,10 @@ required-features = ["async"]
 
 [[test]]
 name = "mock"
+required-features = ["mock-transport", "async", "blocking"]
+
+[[test]]
+name = "mock_server"
 required-features = ["mock", "blocking"]
 
 [[test]]

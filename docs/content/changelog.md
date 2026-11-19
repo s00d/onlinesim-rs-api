@@ -2,10 +2,15 @@
 title: Changelog
 description: Release notes of onlinesim-rs-api.
 navigation:
-  order: 6
+  order: 7
 ---
 
 The full history is in [CHANGELOG.md](https://github.com/s00d/onlinesim-rs-api/blob/master/CHANGELOG.md).
+
+## 0.2.1
+
+- `MockOnlineSim`: an in-process fake of the API for your tests (feature `mock-transport`, no extra dependencies): `MockOnlineSim::new(options).client()` returns a normal client that never opens a socket; `transport()` for clients you build yourself. Helpers `add_sms`, `add_sms_after` (zero-interval `wait_code`), `fail_next` / `fail_next_on`, `fail_next_transport`, `set_balance` / `balance`, `operations`, `rents`, `requests`, `reset`. See [Testing](/testing).
+- Feature `mock` = `mock-transport` + `MockOnlineSim::start()`, the same fake over local HTTP. Its defaults now follow the shared mock spec (prices, numbers, key check, no automatic SMS).
 
 ## 0.2.0
 

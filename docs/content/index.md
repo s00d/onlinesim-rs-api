@@ -17,7 +17,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 |---|---|---|
 | `async` | yes | `Client`: `async` methods. |
 | `blocking` | no | `blocking::Client`: the same methods without `.await`. |
-| `mock` | no | `mock::MockOnlineSim`: a local fake OnlineSim server for your own tests. |
+| `mock-transport` | no | `mock::MockOnlineSim`: an in-process fake OnlineSim API for your own tests, no extra dependencies ([Testing](/testing)). |
+| `mock` | no | `mock-transport` plus `MockOnlineSim::start()`, the same fake over local HTTP (wiremock). |
 
 Without features the crate has only the types, the errors and [`parse_webhook`](/webhooks) — enough for a webhook receiver.
 
