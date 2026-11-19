@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1]
+
+### Fixed
+
+- `cargo publish` failed on a working tree with the docs site installed: the `include` patterns in Cargo.toml were
+  unanchored and matched `README.md`/`LICENSE`/`CHANGELOG.md` at any depth (docs/node_modules). They are anchored to
+  the crate root now; the published files are unchanged. 0.2.0 was tagged but never published to crates.io.
+
 ## [0.2.0]
 
 A rewrite aligned with the shared OnlineSim SDK contract. The public API changed; see the

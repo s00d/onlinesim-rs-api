@@ -7,6 +7,10 @@ navigation:
 
 The full history is in [CHANGELOG.md](https://github.com/s00d/onlinesim-rs-api/blob/master/CHANGELOG.md).
 
+## 0.2.1
+
+- Fixed: packaging (`include` patterns in Cargo.toml anchored to the crate root). 0.2.0 was never published to crates.io.
+
 ## 0.2.0
 
 A rewrite with a new API; 0.1 code does not compile unchanged.
