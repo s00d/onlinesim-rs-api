@@ -94,7 +94,7 @@ async fn state_sends_booleans_as_1_0_lowercase_orderby_and_the_number_flag() {
         .unwrap();
     assert_eq!(ops.len(), 2);
     assert_eq!(ops[0].tzid, 594);
-    assert_eq!(ops[0].response, OperationStatus::TzNumAnswer);
+    assert_eq!(ops[0].response, Some(OperationStatus::TzNumAnswer));
     assert_eq!(ops[0].msg, Some(OperationMsg::Text("195895".into())));
     assert_eq!(ops[1].msg, None);
     assert_eq!(ops[1].guard_interval_remaining_seconds, Some(120));
@@ -222,11 +222,42 @@ async fn state_one_raises_error_no_operations() {
 
 #[tokio::test]
 async fn next() {
-    let (client, fake) = client(vec![ok(json!({ "response": "1", "tzid": "1520" }))]);
+    let (client, fake) = client(vec![ok(json!({ "tzid": "1520", "response": "1" }))]);
     client.numbers().next(1520).await.unwrap();
     let call = fake.last();
     assert_eq!(call.path(), "/api/setOperationRevise.php");
     assert_eq!(call.query(), q(&[("tzid", "1520")]));
+}
+
+#[tokio::test]
+async fn next_surfaces_error_wrong_tzid_for_a_foreign_tzid() {
+    let (client, _) = client(vec![ok(json!({ "response": "ERROR_WRONG_TZID" }))]);
+    let error = client.numbers().next(1).await.unwrap_err();
+    assert_eq!(error.code(), Some("ERROR_WRONG_TZID"));
+}
+
+#[tokio::test]
+async fn ban_after_an_sms_surfaces_zero_with_a_readable_message() {
+    let (client, _) = client(vec![ok(json!({ "response": "0" }))]);
+    let error = client.numbers().ban(1520).await.unwrap_err();
+    assert_eq!(error.code(), Some("0"));
+    assert_eq!(
+        error.to_string(),
+        "Ban not applied: the operation already has an SMS (0)"
+    );
+}
+
+#[tokio::test]
+async fn state_one_accepts_an_operation_without_response() {
+    let (client, _) = client(vec![ok(json!([
+        { "tzid": 5, "country": 7, "service": "vkcom", "sum": 0.5, "time": 900, "form": "index" }
+    ]))]);
+    let op = client
+        .numbers()
+        .state_one(5, Default::default())
+        .await
+        .unwrap();
+    assert_eq!((op.tzid, op.response), (5, None));
 }
 
 #[tokio::test]

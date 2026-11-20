@@ -7,6 +7,12 @@ navigation:
 
 The full history is in [CHANGELOG.md](https://github.com/s00d/onlinesim-rs-api/blob/master/CHANGELOG.md).
 
+## 0.2.2
+
+- Fixed models against the current API: `Profile.number`/`country`, optional `Operation.response`, rent SMS `code` `"0"` for `notify` SMS, nullable free-list and payment fields; `payment_history().paylist` is kept when it arrives as a list.
+- `wait_code` retries `TRY_AGAIN_LATER` (rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`.
+- `MockOnlineSim` follows the backend more closely: rent reservation and confirmation, `setOperationRevise` and `closeRentNum` answers, missing vs wrong key — see [Testing](/testing).
+
 ## 0.2.1
 
 - `MockOnlineSim`: an in-process fake of the API for your tests (feature `mock-transport`, no extra dependencies): `MockOnlineSim::new(options).client()` returns a normal client that never opens a socket; `transport()` for clients you build yourself. Helpers `add_sms`, `add_sms_after` (zero-interval `wait_code`), `fail_next` / `fail_next_on`, `fail_next_transport`, `set_balance` / `balance`, `operations`, `rents`, `requests`, `reset`. See [Testing](/testing).

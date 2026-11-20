@@ -141,7 +141,8 @@ impl<T> Call<T> {
 }
 
 /// The one response function: the JSON body is checked before the HTTP status, because a wrong key is
-/// HTTP 456 with `{"response":"ERROR_WRONG_KEY"}`.
+/// HTTP 456 with `{"response":"ERROR_WRONG_KEY"}` and the rate limit HTTP 429 with
+/// `{"response":"TRY_AGAIN_LATER"}`.
 pub(crate) fn parse_response(response: HttpResponse) -> Result<Value> {
     let HttpResponse { status, body } = response;
     let data: Value = serde_json::from_str(&body).map_err(|_| {

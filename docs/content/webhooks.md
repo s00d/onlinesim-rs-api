@@ -46,9 +46,9 @@ fn main() {
 | `operation_id` | `Option<i64>` | `tzid` of the operation or rent. |
 | `user_id` | `Option<i64>` | Account id. |
 | `country_code` | `Option<i64>` | Country code of the number. |
-| `number` | `Option<String>` | The number, e.g. `+79001234567`. |
+| `number` | `Option<String>` | Numbers: `+` and the full number (`+79001234567`), or `hidden`. Rent: the full number in digits without `+` (`79001234567`). |
 | `sender` | `Option<String>` | Sender of the SMS, e.g. `VK`. |
 | `message` | `Option<String>` | Full SMS text. |
-| `code` | `Option<String>` | Code extracted from the SMS. |
-| `time_start` | `Option<String>` | Start of the operation. |
-| `time_left` | `Option<i64>` | Time left. |
+| `code` | `Option<String>` | Code extracted from the SMS; empty when none was found. |
+| `time_start` | `Option<String>` | Numbers: when the operation was ordered. Rent: when the SMS arrived. `YYYY-MM-DD HH:MM:SS`. |
+| `time_left` | `Option<i64>` | Time left: seconds for numbers, minutes for rent. |

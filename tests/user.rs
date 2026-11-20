@@ -38,6 +38,39 @@ async fn profile() {
 }
 
 #[tokio::test]
+async fn profile_decodes_number_as_int_and_country_as_string() {
+    let (client, _) = client(vec![ok(json!({
+        "response": "1", "profile": { "id": 1, "number": 79001234567_i64, "country": "RU" }
+    }))]);
+    let p = client.user().profile().await.unwrap();
+    assert_eq!(
+        (p.number, p.country.as_deref()),
+        (Some(79001234567), Some("RU"))
+    );
+}
+
+#[tokio::test]
+async fn payment_history_keeps_a_paylist_sent_as_an_array_and_nullable_order_fields() {
+    let mut body = fixture("getPaymentHistory");
+    body["paylist"] = json!([{ "id": 0, "name": "Card" }, { "id": 1, "name": "Crypto" }]);
+    body["orders"]["data"] = json!([{
+        "id": 1, "sum": "10.00", "currency": null, "form_text": null, "stat": 0,
+        "created_at": "2026-06-14 09:12:12"
+    }]);
+    let (client, _) = client(vec![ok(body)]);
+    let h = client.user().payment_history(1).await.unwrap();
+    assert_eq!(h.paylist.len(), 2);
+    assert_eq!(h.paylist["1"]["name"], "Crypto");
+    assert_eq!(
+        (
+            h.orders.data[0].currency.as_deref(),
+            h.orders.data[0].form_text.as_deref()
+        ),
+        (None, None)
+    );
+}
+
+#[tokio::test]
 async fn payment_history_normalises_the_empty_paylist() {
     let (client, fake) = client(vec![ok(fixture("getPaymentHistory"))]);
     let h = client.user().payment_history(2).await.unwrap();

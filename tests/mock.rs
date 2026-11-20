@@ -9,8 +9,10 @@ use onlinesim_rs_api::mock::{
 };
 use onlinesim_rs_api::types::{OperationMsg, OperationStatus};
 use onlinesim_rs_api::{
-    Client, Error, FreeListOptions, Method, OrderBy, StateOneOptions, StateOptions, WaitCodeOptions,
+    BlockingTransport, Client, Error, FreeListOptions, HttpRequest, HttpResponse, Method, OrderBy,
+    StateOneOptions, StateOptions, WaitCodeOptions,
 };
+use serde_json::{Value, json};
 
 fn mock_with(balance: f64) -> (MockOnlineSim, Client) {
     let mock = MockOnlineSim::new(MockOptions {
@@ -32,16 +34,41 @@ fn code_of(error: Error) -> String {
     error.code().unwrap_or("<no code>").to_string()
 }
 
+/// A raw GET through the mock's transport: status and parsed body, as the server would send them.
+fn raw(mock: &MockOnlineSim, path_and_query: &str, key: Option<&str>) -> (u16, Value) {
+    let request = HttpRequest {
+        method: Method::Get,
+        url: format!("{MOCK_BASE_URL}{path_and_query}"),
+        headers: key
+            .map(|k| ("Authorization".to_string(), format!("Bearer {k}")))
+            .into_iter()
+            .collect(),
+        body: None,
+        timeout: Duration::from_secs(1),
+    };
+    let HttpResponse { status, body } =
+        BlockingTransport::send(&mock.transport(), request).unwrap();
+    (status, serde_json::from_str(&body).unwrap())
+}
+
 // ----- auth and transport -----
 
 #[tokio::test(start_paused = true)]
-async fn wrong_or_missing_key_is_456_error_wrong_key() {
+async fn wrong_key_is_456_missing_key_200_both_error_wrong_key() {
     let mock = MockOnlineSim::default();
     for builder in [Client::builder().api_key("wrong"), Client::builder()] {
         let client = builder.build_with(mock.transport()).unwrap();
         let error = client.user().balance().await.unwrap_err();
         assert_eq!(code_of(error), "ERROR_WRONG_KEY");
     }
+    let wrong_key = json!({ "response": "ERROR_WRONG_KEY" });
+    assert_eq!(raw(&mock, "getBalance.php", None), (200, wrong_key.clone()));
+    assert_eq!(
+        raw(&mock, "getBalance.php", Some("nope")),
+        (456, wrong_key.clone())
+    );
+    // Public endpoints check a sent key too.
+    assert_eq!(raw(&mock, "getFreeList", Some("nope")), (456, wrong_key));
 }
 
 #[tokio::test(start_paused = true)]
@@ -108,6 +135,17 @@ async fn get_freezes_the_price_with_deterministic_numbers() {
     assert_eq!(order.country, 7);
     assert_eq!(order.service, "vkcom");
     assert_eq!(order.time, 1200);
+    assert_eq!(order.title.as_deref(), Some("vkcom"));
+    assert_eq!(order.guard_interval_remaining_seconds, Some(0));
+    let (_, body) = raw(
+        &mock,
+        "getNum.php?service=google&country=44&number=1",
+        Some("mock-key"),
+    );
+    assert_eq!(body["response_text"], "Waiting for SMS");
+    mock.reset();
+    numbers.get("google", 44, &[]).await.unwrap();
+    numbers.get_with_number("vkcom", 7, &[]).await.unwrap();
 
     let balance = client.user().balance().await.unwrap();
     assert_eq!((balance.balance, balance.zbalance), (10.0, 0.7));
@@ -151,7 +189,7 @@ async fn state_lifecycle() {
         .state_one(first, StateOneOptions::default())
         .await
         .unwrap();
-    assert_eq!(op.response, OperationStatus::TzNumWait);
+    assert_eq!(op.response, Some(OperationStatus::TzNumWait));
     assert_eq!(op.msg, None);
     assert_eq!(op.guard_interval_remaining_seconds, Some(0));
 
@@ -160,7 +198,7 @@ async fn state_lifecycle() {
         .state_one(first, StateOneOptions::default())
         .await
         .unwrap();
-    assert_eq!(op.response, OperationStatus::TzNumAnswer);
+    assert_eq!(op.response, Some(OperationStatus::TzNumAnswer));
     assert_eq!(op.msg, Some(OperationMsg::Text("123456".into())));
     let full = StateOneOptions {
         message_to_code: false,
@@ -187,7 +225,7 @@ async fn state_lifecycle() {
         .state_one(first, StateOneOptions::default())
         .await
         .unwrap();
-    assert_eq!(op.response, OperationStatus::TzOverOk);
+    assert_eq!(op.response, Some(OperationStatus::TzOverOk));
     assert_eq!(op.time, Some(0));
 }
 
@@ -208,7 +246,10 @@ async fn full_text_without_code_next_and_msg_list() {
         .state_one(tzid, StateOneOptions::default())
         .await
         .unwrap();
-    assert_eq!((op.response, op.msg), (OperationStatus::TzNumWait, None));
+    assert_eq!(
+        (op.response, op.msg),
+        (Some(OperationStatus::TzNumWait), None)
+    );
     mock.add_sms_from(tzid, "code 4321", Some("Other"));
     let op = numbers
         .state_one(tzid, StateOneOptions::default())
@@ -230,8 +271,33 @@ async fn full_text_without_code_next_and_msg_list() {
         }
         other => panic!("expected a list, got {other:?}"),
     }
-    // setOperationRevise always succeeds, even for unknown tzids.
-    numbers.next(999).await.unwrap();
+    let revised = mock
+        .requests()
+        .iter()
+        .filter(|r| r.path == "setOperationRevise.php")
+        .count();
+    assert_eq!(revised, 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn next_answers_the_tzid_as_a_string_and_rejects_unknown_or_zero_tzids() {
+    let (mock, client) = mock_with(100.0);
+    let numbers = client.numbers();
+    let tzid = numbers.get("google", 44, &[]).await.unwrap();
+    let path = format!("setOperationRevise.php?tzid={tzid}");
+    assert_eq!(
+        raw(&mock, &path, Some("mock-key")),
+        (200, json!({ "tzid": tzid.to_string(), "response": "1" }))
+    );
+    assert_eq!(
+        code_of(numbers.next(424_242).await.unwrap_err()),
+        "ERROR_WRONG_TZID"
+    );
+    assert_eq!(code_of(numbers.next(0).await.unwrap_err()), "ERROR_NO_TZID");
+    assert_eq!(
+        code_of(numbers.close(0).await.unwrap_err()),
+        "ERROR_NO_TZID"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -345,34 +411,114 @@ async fn numbers_tariffs_from_prices() {
 // ----- rent -----
 
 #[tokio::test(start_paused = true)]
-async fn rent_lifecycle() {
+async fn rent_get_reserves_first_sms_confirms_and_charges_extend_close() {
     let (mock, client) = mock_with(10.0);
     let rent = client.rent();
-    let item = rent.get(7, 1, true).await.unwrap();
+    let item = rent.get(7, 3, true).await.unwrap();
     assert_eq!((item.tzid, item.number.as_str()), (1, "900000001"));
-    assert_eq!((item.sum, item.days, item.time), (1.0, 1, 1440));
-    assert_eq!(item.time_seconds, Some(86_400));
+    assert_eq!((item.status, item.checked), (0, Some(false)));
+    assert_eq!((item.sum, item.days, item.time), (2.5, 0, 20));
+    assert_eq!((item.rent, item.days_autoextend), (Some(3), Some(3)));
+    assert_eq!(item.time_seconds, Some(1200));
+    assert_eq!(item.guard_interval_remaining_seconds, Some(0));
     assert_eq!(item.extend.get("3"), Some(&2.5));
-    assert_eq!(mock.balance(), 9.0);
+    // Reserved: the total balance stays, the price is frozen.
+    assert_eq!(mock.balance(), 10.0);
+    let balance = client.user().balance().await.unwrap();
+    assert_eq!((balance.balance, balance.zbalance), (10.0, 2.5));
+    let unconfirmed = rent.extend(item.tzid, 1).await.unwrap_err();
+    assert_eq!(code_of(unconfirmed), "TRY_AGAIN_LATER");
 
-    let extended = rent.extend(item.tzid, 3).await.unwrap();
+    mock.add_sms_from(item.tzid, "Bank: 777 888", Some("bank"));
+    mock.add_sms(item.tzid, "no code here");
+    let state = rent.state_one(item.tzid).await.unwrap();
+    assert_eq!((state.status, state.checked), (1, Some(true)));
+    assert_eq!((state.days, state.time), (3, 3 * 1440));
+    assert_eq!(state.time_seconds, Some(3 * 86_400));
+    let messages: Vec<_> = state
+        .messages
+        .iter()
+        .map(|m| (m.service.as_str(), m.code.as_str()))
+        .collect();
+    assert_eq!(messages, [("other", ""), ("bank", "777888")]); // newest first
+    assert_eq!(mock.balance(), 7.5);
+    let balance = client.user().balance().await.unwrap();
+    assert_eq!((balance.balance, balance.zbalance), (7.5, 0.0));
+
+    let extended = rent.extend(item.tzid, 1).await.unwrap();
     assert_eq!((extended.days, extended.sum), (4, 3.5));
+    assert_eq!(
+        (extended.rent, extended.days_autoextend),
+        (Some(4), Some(3))
+    );
     assert_eq!(mock.balance(), 6.5);
-    assert_eq!(rent.state().await.unwrap().len(), 1);
-    assert_eq!(rent.state_one(item.tzid).await.unwrap().days, 4);
+    let period = rent.extend(item.tzid, 2).await.unwrap_err();
+    assert_eq!(code_of(period), "TRY_AGAIN_LATER"); // unknown period
+    let unknown = rent.extend(999, 1).await.unwrap_err();
+    assert_eq!(code_of(unknown), "TRY_AGAIN_LATER"); // unknown tzid
 
     let fixed = rent.get(7, 1, false).await.unwrap();
-    assert!(fixed.extend.is_empty());
+    mock.add_sms(fixed.tzid, "1234");
+    assert!(rent.state_one(fixed.tzid).await.unwrap().extend.is_empty());
     let refused = rent.extend(fixed.tzid, 1).await.unwrap_err();
     assert_eq!(code_of(refused), "TRY_AGAIN_LATER");
+    let ids: Vec<_> = rent.state().await.unwrap().iter().map(|r| r.tzid).collect();
+    assert_eq!(ids, [item.tzid, fixed.tzid]);
+
+    rent.close(fixed.tzid).await.unwrap(); // confirmed: no refund
+    assert_eq!(mock.balance(), 5.5);
+    assert_eq!(mock.rents().len(), 1);
+    let gone = rent.state_one(fixed.tzid).await.unwrap_err();
+    assert_eq!(code_of(gone), "ERROR_NO_OPERATIONS");
+    let again = rent.close(fixed.tzid).await.unwrap_err();
+    assert_eq!(code_of(again), "ERROR_NO_OPERATIONS");
+}
+
+#[tokio::test(start_paused = true)]
+async fn rent_sum_is_a_number_in_get_and_a_decimal_string_in_state_on_the_wire() {
+    let mock = MockOnlineSim::default();
+    let (_, got) = raw(&mock, "rent/getRentNum.php?days=3", Some("mock-key"));
+    assert_eq!(got["item"]["sum"], json!(2.5));
+    let (_, listed) = raw(&mock, "rent/getRentState.php", Some("mock-key"));
+    assert_eq!(listed["list"][0]["sum"], json!("2.50"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn unconfirmed_rent_close_releases_notify_sms_has_code_0_and_guard_interval() {
+    let mock = MockOnlineSim::new(MockOptions {
+        balance: 10.0,
+        guard_interval: 120,
+        ..MockOptions::default()
+    });
+    let client = mock.client().unwrap();
+    let rent = client.rent();
+    let item = rent.get(7, 3, true).await.unwrap();
+    assert_eq!(item.guard_interval_remaining_seconds, Some(120));
+    let early = rent.close(item.tzid).await.unwrap_err();
+    assert_eq!(code_of(early), "NO_COMPLETE_TZID");
+
+    mock.add_sms_from(
+        item.tzid,
+        "Messages from this sender are not accepted",
+        Some("notify"),
+    );
+    let state = rent.state_one(item.tzid).await.unwrap();
+    assert_eq!((state.status, state.checked), (0, Some(false)));
+    assert_eq!(state.guard_interval_remaining_seconds, Some(0));
+    assert_eq!(
+        (
+            state.messages[0].service.as_str(),
+            state.messages[0].code.as_str()
+        ),
+        ("notify", "0")
+    );
+    let (_, wire) = raw(&mock, "rent/getRentState.php", Some("mock-key"));
+    assert_eq!(wire["list"][0]["messages"][0]["code"], json!(0));
 
     rent.close(item.tzid).await.unwrap();
-    assert_eq!(mock.balance(), 5.5); // no refund
-    assert_eq!(
-        code_of(rent.close(item.tzid).await.unwrap_err()),
-        "ERROR_WRONG_TZID"
-    );
-    assert_eq!(mock.rents().len(), 1);
+    assert_eq!(mock.balance(), 10.0); // released, nothing charged
+    let balance = client.user().balance().await.unwrap();
+    assert_eq!((balance.balance, balance.zbalance), (10.0, 0.0));
 }
 
 #[tokio::test(start_paused = true)]
@@ -381,7 +527,7 @@ async fn rent_errors() {
     let rent = client.rent();
     assert_eq!(
         code_of(rent.get(44, 1, true).await.unwrap_err()),
-        "NO_COUNTRY"
+        "UNDEFINED_COUNTRY"
     );
     assert_eq!(
         code_of(rent.get(7, 2, true).await.unwrap_err()),
@@ -448,20 +594,71 @@ async fn profile_webhook_and_logs() {
         mock.webhook_url().as_deref(),
         Some("https://example.com/hook")
     );
-    let invalid = user.set_webhook_url("ftp://example.com").await.unwrap_err();
+    let invalid = user.set_webhook_url("not a url").await.unwrap_err();
     assert_eq!(code_of(invalid), "VALIDATION_ERROR");
+    user.set_webhook_url("ftp://example.com").await.unwrap(); // any scheme://… URL
+    user.set_webhook_url("https://example.com/hook")
+        .await
+        .unwrap();
 
     let tzid = client.numbers().get("google", 44, &[]).await.unwrap();
     mock.add_sms(tzid, "Code 777777");
+    let item = client.rent().get(7, 1, true).await.unwrap();
+    mock.add_sms(item.tzid, "code 5678");
+    mock.add_sms(item.tzid, "no code");
     let logs = user.webhook_logs(1).await.unwrap();
-    assert_eq!(logs.total, 1);
-    assert_eq!(logs.data[0].kind, "receiving_sms");
-    assert_eq!(logs.data[0].params["code"], "777777");
+    assert_eq!(logs.total, 3);
+    let seen: Vec<_> = logs
+        .data
+        .iter()
+        .map(|l| {
+            (
+                l.kind.as_str(),
+                l.params["operation_id"].as_i64().unwrap(),
+                l.params["code"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("rent_sms", item.tzid, ""),
+            ("rent_sms", item.tzid, "5678"),
+            ("receiving_sms", tzid, "777777"),
+        ]
+    );
+    // Activation: +number, seconds left, order time. Rent: digits without +, minutes left, SMS time.
+    let activation = &logs.data[2].params;
+    assert_eq!(
+        (
+            &activation["number"],
+            &activation["time_left"],
+            &activation["time_start"]
+        ),
+        (
+            &json!("+44900000001"),
+            &json!(1200),
+            &json!("2026-01-01 00:00:01")
+        )
+    );
+    let rented = &logs.data[1].params;
+    assert_eq!(
+        (
+            &rented["number"],
+            &rented["time_left"],
+            &rented["time_start"]
+        ),
+        (
+            &json!("7900000002"),
+            &json!(1440),
+            &json!("2026-01-01 00:00:03")
+        )
+    );
 
     user.clear_webhook_url().await.unwrap();
     assert_eq!(user.profile().await.unwrap().webhook_url, None);
     mock.add_sms(tzid, "Code 888888");
-    assert_eq!(user.webhook_logs(1).await.unwrap().total, 1);
+    assert_eq!(user.webhook_logs(1).await.unwrap().total, 3);
 }
 
 #[tokio::test(start_paused = true)]
@@ -475,6 +672,10 @@ async fn balance_and_payment_history() {
     );
     let history = client.user().payment_history(1).await.unwrap();
     assert!(history.orders.data.is_empty());
+    assert!(history.paylist.is_empty());
+    assert_eq!(history.forms["1"], "Card");
+    assert_eq!(history.buttons["USD"], json!([5, 10, 20]));
+    assert_eq!(history.domains, ["onlinesim.io"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -485,9 +686,36 @@ async fn free_list() {
         .list(&FreeListOptions::default())
         .await
         .unwrap();
+    let codes: Vec<_> = uk.countries.iter().map(|c| c.country).collect();
+    assert_eq!(codes, [44, 7]);
     assert!(uk.numbers.contains_key("7459608320"));
+    assert_eq!((uk.messages.country, uk.messages.page.per_page), (44, 10));
     assert_eq!(uk.messages.page.data.len(), 2);
     assert_eq!(uk.messages.page.data[0].code, "195895");
+    assert_eq!(
+        uk.messages.page.data[0].created_at,
+        "2026-01-01T00:00:00.000000Z"
+    );
+    for (count, per_page) in [(0, 10), (9999, 500)] {
+        let options = FreeListOptions {
+            count: Some(count),
+            ..FreeListOptions::default()
+        };
+        let list = client.free().list(&options).await.unwrap();
+        assert_eq!(list.messages.page.per_page, per_page); // clamped to 10..500
+    }
+    let unknown = FreeListOptions {
+        country: Some(999),
+        ..FreeListOptions::default()
+    };
+    let unknown = client.free().list(&unknown).await.unwrap();
+    assert_eq!(unknown.messages.country, 44); // unknown → the first country
+    let (_, wire) = raw(&MockOnlineSim::default(), "getFreeList", None);
+    assert_eq!(
+        (&wire["response"], &wire["content"]),
+        (&json!(1), &Value::Null)
+    );
+    assert!(wire["ignore"].is_string());
     let ru = FreeListOptions {
         country: Some(7),
         ..FreeListOptions::default()

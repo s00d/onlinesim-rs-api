@@ -43,8 +43,8 @@ pub struct MockOptions {
     pub prices: MockPrices,
     /// Rent tariffs. Default `{7: {days: {1: 1.0, 3: 2.5, 7: 5.0}, extend: true}}`.
     pub rent_tariffs: BTreeMap<i64, MockRentTariff>,
-    /// Guard interval of new operations, seconds. `> 0`: an operation without SMS cannot be closed
-    /// (`NO_COMPLETE_TZID`). Default `0`.
+    /// Guard interval of new operations and rents, seconds. `> 0`: an operation without SMS, or an
+    /// unconfirmed rent without any SMS, cannot be closed (`NO_COMPLETE_TZID`). Default `0`.
     pub guard_interval: u64,
 }
 
@@ -93,7 +93,8 @@ pub struct MockSms {
 pub struct MockRentSms {
     /// Message id.
     pub id: i64,
-    /// Sender / service (`other` unless given).
+    /// Sender / service (`other` unless given). `notify`: a notice about a prohibited sender; it gets the
+    /// integer `code` `0` on the wire and does not confirm the rent.
     pub service: String,
     /// Full text.
     pub text: String,
@@ -137,7 +138,11 @@ pub struct MockRent {
     pub number: String,
     /// Rent days, extensions included.
     pub days: i64,
-    /// Total paid, USD.
+    /// The initial period (`days` of getRentNum).
+    pub initial_days: i64,
+    /// `0`: reserved, waiting for the first SMS; `1`: confirmed by an SMS that is not `notify`, charged.
+    pub status: i64,
+    /// Total cost incl. extensions, USD. Frozen while `status` is 0.
     pub sum: f64,
     /// Extendable (`extension=1`, the default).
     pub extension: bool,
@@ -230,6 +235,10 @@ impl Default for SmsScript {
 pub(super) const MOCK_USER_ID: i64 = 1;
 /// Seconds an operation stays open, as reported in `time`. The mock has no clock, so it never runs down.
 pub(super) const OPERATION_TIME: i64 = 1200;
+/// Minutes an unconfirmed rent waits for its first SMS (`stop_time` = start + this).
+pub(super) const RENT_FIRST_SMS_MINUTES: i64 = 20;
+/// Sender of a rent SMS from a prohibited sender: integer `code` `0`, confirms nothing.
+pub(super) const NOTIFY: &str = "notify";
 /// 2026-01-01 00:00:00 UTC, in days since 1970-01-01.
 const EPOCH_DAYS: i64 = 20_454;
 
@@ -355,15 +364,21 @@ impl MockState {
         *self = Self::new(self.options.clone());
     }
 
-    /// Frozen by open operations (plus the extra frozen part), mills.
+    /// Frozen by open operations and unconfirmed rents (plus the extra frozen part), mills.
     pub(super) fn frozen(&self) -> i64 {
-        self.extra_frozen
-            + self
-                .operations
-                .values()
-                .filter(|op| op.status != OperationStatus::TzOverOk)
-                .map(|op| to_mills(op.sum))
-                .sum::<i64>()
+        let operations: i64 = self
+            .operations
+            .values()
+            .filter(|op| op.status != OperationStatus::TzOverOk)
+            .map(|op| to_mills(op.sum))
+            .sum();
+        let rents: i64 = self
+            .rents
+            .values()
+            .filter(|r| r.status == 0)
+            .map(|r| to_mills(r.sum))
+            .sum();
+        self.extra_frozen + operations + rents
     }
 
     /// Available balance (total minus frozen), mills.
@@ -410,8 +425,17 @@ impl MockState {
             };
             op.messages.push(sms.clone());
             op.status = OperationStatus::TzNumAnswer;
-            let (country, number) = (op.country, op.number.clone());
-            self.webhook("receiving_sms", tzid, country, &number, &sms);
+            // Activation: `+<digits>`, seconds left, the order time.
+            let (country, number, start) = (op.country, op.number.clone(), stamp(op.tzid));
+            self.webhook(
+                "receiving_sms",
+                tzid,
+                country,
+                &number,
+                &sms,
+                OPERATION_TIME,
+                start,
+            );
             return true;
         }
         if self.rents.contains_key(&tzid) {
@@ -429,8 +453,29 @@ impl MockState {
                 code: sms.code.clone(),
                 created_at: stamp(id),
             });
-            let (country, number) = (rent.country, rent.number.clone());
-            self.webhook("rent_sms", tzid, country, &number, &sms);
+            if rent.status == 0 && sms.service != NOTIFY {
+                // The first real SMS confirms the rent: the reservation is charged (`frozen()` drops it).
+                rent.status = 1;
+                self.balance -= to_mills(rent.sum);
+            }
+            let rent = &self.rents[&tzid];
+            // Rent: country code + number in digits (no `+`), minutes left, the SMS time.
+            let number = format!("{}{}", rent.country, rent.number);
+            let minutes_left = if rent.status == 1 {
+                rent.days * 24 * 60
+            } else {
+                RENT_FIRST_SMS_MINUTES
+            };
+            let country = rent.country;
+            self.webhook(
+                "rent_sms",
+                tzid,
+                country,
+                &number,
+                &sms,
+                minutes_left,
+                stamp(id),
+            );
             return true;
         }
         false
@@ -463,7 +508,17 @@ impl MockState {
     }
 
     /// No HTTP call: the mock only records what the backend would have sent.
-    fn webhook(&mut self, kind: &str, tzid: i64, country: i64, number: &str, sms: &MockSms) {
+    #[allow(clippy::too_many_arguments)]
+    fn webhook(
+        &mut self,
+        kind: &str,
+        tzid: i64,
+        country: i64,
+        number: &str,
+        sms: &MockSms,
+        time_left: i64,
+        time_start: String,
+    ) {
         let Some(url) = self.webhook_url.clone() else {
             return;
         };
@@ -482,9 +537,9 @@ impl MockState {
                 "number": number,
                 "sender": sms.service,
                 "message": sms.text,
-                "code": sms.code,
-                "time_start": time,
-                "time_left": OPERATION_TIME,
+                "code": sms.code.as_deref().unwrap_or_default(),
+                "time_start": time_start,
+                "time_left": time_left,
             },
             "status": "success",
             "error": null,

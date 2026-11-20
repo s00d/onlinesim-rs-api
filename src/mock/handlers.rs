@@ -6,8 +6,8 @@
 use serde_json::{Map, Value, json};
 
 use super::state::{
-    MOCK_USER_ID, MockOperation, MockRent, MockRequest, MockSms, MockState, OPERATION_TIME,
-    extract_code, from_mills, stamp, to_mills,
+    MOCK_USER_ID, MockOperation, MockRent, MockRequest, MockSms, MockState, NOTIFY, OPERATION_TIME,
+    RENT_FIRST_SMS_MINUTES, extract_code, from_mills, stamp, to_mills,
 };
 use crate::transport::Method;
 use crate::types::OperationStatus;
@@ -69,6 +69,11 @@ fn decimal(mills: i64, digits: u32) -> String {
     } else {
         format!("{sign}{}.{:03}", mills / 1000, mills % 1000)
     }
+}
+
+/// `YYYY-MM-DDTHH:MM:SS.000000Z`, the ISO-8601 form getFreeList sends.
+fn iso(seconds: i64) -> String {
+    format!("{}.000000Z", stamp(seconds).replace(' ', "T"))
 }
 
 fn country_name(code: i64) -> (String, String) {
@@ -240,6 +245,9 @@ fn get_num(state: &mut MockState, req: &MockRequest) -> Value {
         "country": op_country,
         "time": OPERATION_TIME,
         "service": service,
+        "title": service,
+        "response_text": "Waiting for SMS",
+        "guard_interval_remaining_seconds": state.options.guard_interval,
     })
 }
 
@@ -274,20 +282,24 @@ fn get_state(state: &mut MockState, req: &MockRequest) -> Value {
 
 fn set_operation_revise(state: &mut MockState, req: &MockRequest) -> Value {
     let tzid = int(req, "tzid", 0);
-    // Always succeeds, even for unknown tzids, like the backend.
-    if let Some(op) = state
-        .operations
-        .get_mut(&tzid)
-        .filter(|op| op.status != OperationStatus::TzOverOk)
-    {
+    if tzid == 0 {
+        return error("ERROR_NO_TZID");
+    }
+    let Some(op) = state.operations.get_mut(&tzid) else {
+        return error("ERROR_WRONG_TZID");
+    };
+    if op.status != OperationStatus::TzOverOk {
         op.cursor = op.messages.len();
         op.status = OperationStatus::TzNumWait;
     }
-    json!({ "response": 1, "tzid": tzid })
+    json!({ "tzid": tzid.to_string(), "response": "1" })
 }
 
 fn set_operation_ok(state: &mut MockState, req: &MockRequest) -> Value {
     let tzid = int(req, "tzid", 0);
+    if tzid == 0 {
+        return error("ERROR_NO_TZID");
+    }
     let guard = state.options.guard_interval;
     let Some(op) = state
         .operations
@@ -358,12 +370,20 @@ fn get_numbers_stats(state: &mut MockState, req: &MockRequest) -> Value {
 
 // ----- rent -----
 
-fn rent_item(state: &MockState, rent: &MockRent, req: &MockRequest) -> Value {
+/// A rent as the backend sends it. `sum` is a number in getRentNum/extendRentState and a 2-decimal string in
+/// getRentState (`string_sum`). An unconfirmed rent (`status` 0) waits 20 minutes for its first SMS.
+fn rent_item(state: &MockState, rent: &MockRent, req: &MockRequest, string_sum: bool) -> Value {
     let tariff = state
         .options
         .rent_tariffs
         .get(&rent.country)
         .filter(|t| rent.extension && t.extend);
+    let confirmed = rent.status == 1;
+    let minutes = if confirmed {
+        rent.days * 24 * 60
+    } else {
+        RENT_FIRST_SMS_MINUTES
+    };
     let start = rent.tzid;
     let messages: Vec<Value> = rent
         .messages
@@ -374,7 +394,8 @@ fn rent_item(state: &MockState, rent: &MockRent, req: &MockRequest) -> Value {
                 "id": m.id,
                 "service": m.service,
                 "text": m.text,
-                "code": m.code.clone().unwrap_or_default(),
+                // A notice about a prohibited sender carries the integer 0, other SMS a string.
+                "code": if m.service == NOTIFY { json!(0) } else { json!(m.code.clone().unwrap_or_default()) },
                 "created_at": m.created_at,
             })
         })
@@ -386,31 +407,37 @@ fn rent_item(state: &MockState, rent: &MockRent, req: &MockRequest) -> Value {
             .collect()
     });
     let mut item = json!({
-        "status": 1,
+        "status": rent.status,
         "extension": i64::from(rent.extension),
         "messages": messages,
         "webhook_url": state.webhook_url,
-        "sum": decimal(to_mills(rent.sum), 2),
+        "sum": if string_sum { json!(decimal(to_mills(rent.sum), 2)) } else { json!(rent.sum) },
         "country": rent.country,
         "start_time": stamp(start),
-        "stop_time": stamp(start + rent.days * 86_400),
+        "stop_time": stamp(start + minutes * 60),
         "checked_time": stamp(start),
         "number": rent.number,
-        "days_autoextend": 0,
-        "rent": 1,
+        "days_autoextend": rent.initial_days,
+        "rent": rent.days,
         "tzid": rent.tzid,
-        "time": rent.days * 24 * 60,
-        "days": rent.days,
-        "hours": rent.days * 24,
+        "time": minutes,
+        "days": if confirmed { rent.days } else { 0 },
+        "hours": if confirmed { rent.days * 24 } else { 0 },
         "extend": map_or_list(extend),
-        "checked": true,
-        "reload": null,
+        "checked": confirmed,
+        "reload": if rent.country == 7 { json!(0) } else { Value::Null },
         "day_extend": tariff.and_then(|t| t.days.get(&1)).copied().unwrap_or(0.0),
         "m_ext": false,
         "freeze": false,
     });
     if arg(req, "number").is_some() {
-        item["time_seconds"] = json!(rent.days * 86_400);
+        item["time_seconds"] = json!(minutes * 60);
+        let guard = if !confirmed && rent.messages.is_empty() {
+            state.options.guard_interval
+        } else {
+            0
+        };
+        item["guard_interval_remaining_seconds"] = json!(guard);
     }
     item
 }
@@ -418,7 +445,7 @@ fn rent_item(state: &MockState, rent: &MockRent, req: &MockRequest) -> Value {
 fn get_rent_num(state: &mut MockState, req: &MockRequest) -> Value {
     let country = int(req, "country", 7);
     let Some(tariff) = state.options.rent_tariffs.get(&country) else {
-        return error("NO_COUNTRY");
+        return error("UNDEFINED_COUNTRY");
     };
     let days = int(req, "days", 1);
     let Some(&price) = tariff.days.get(&days) else {
@@ -428,18 +455,20 @@ fn get_rent_num(state: &mut MockState, req: &MockRequest) -> Value {
         return error("WARNING_LOW_BALANCE");
     }
     let tzid = state.next_id();
-    state.balance -= to_mills(price);
+    // Reserved, not charged (`frozen()` counts it): the first SMS that is not `notify` charges it.
     let rent = MockRent {
         tzid,
         country,
         number: MockState::short_number(tzid),
         days,
+        initial_days: days,
+        status: 0,
         sum: price,
         // `extension` defaults to 1 on the server; `0` makes the rent non-extendable for good.
         extension: arg(req, "extension") != Some("0"),
         messages: Vec::new(),
     };
-    let item = rent_item(state, &rent, req);
+    let item = rent_item(state, &rent, req, false);
     state.rents.insert(tzid, rent);
     json!({ "response": 1, "item": item })
 }
@@ -462,26 +491,25 @@ fn get_rent_state(state: &mut MockState, req: &MockRequest) -> Value {
     }
     let list: Vec<Value> = ids
         .iter()
-        .map(|id| rent_item(state, &state.rents[id], req))
+        .map(|id| rent_item(state, &state.rents[id], req, true))
         .collect();
     json!({ "response": 1, "list": list })
 }
 
 fn extend_rent_state(state: &mut MockState, req: &MockRequest) -> Value {
+    // Every refusal is TRY_AGAIN_LATER, like the backend: unknown tzid, unconfirmed rent, not extendable,
+    // unknown days.
     let tzid = int(req, "tzid", 0);
-    let Some(rent) = state.rents.get(&tzid) else {
-        return error("ERROR_WRONG_TZID");
-    };
-    let Some(tariff) = state
-        .options
-        .rent_tariffs
-        .get(&rent.country)
-        .filter(|t| rent.extension && t.extend)
-    else {
+    let price = state.rents.get(&tzid).and_then(|rent| {
+        state
+            .options
+            .rent_tariffs
+            .get(&rent.country)
+            .filter(|t| rent.status == 1 && rent.extension && t.extend)
+            .and_then(|t| t.days.get(&int(req, "days", 1)).copied())
+    });
+    let Some(price) = price else {
         return error("TRY_AGAIN_LATER");
-    };
-    let Some(&price) = tariff.days.get(&int(req, "days", 1)) else {
-        return error("UNDEFINED_DAYS");
     };
     if state.available() < to_mills(price) {
         return error("WARNING_LOW_BALANCE");
@@ -490,15 +518,23 @@ fn extend_rent_state(state: &mut MockState, req: &MockRequest) -> Value {
     let rent = state.rents.get_mut(&tzid).expect("checked above");
     rent.days += int(req, "days", 1);
     rent.sum = from_mills(to_mills(rent.sum) + to_mills(price));
-    let item = rent_item(state, &state.rents[&tzid], req);
+    let item = rent_item(state, &state.rents[&tzid], req, false);
     json!({ "response": 1, "item": item })
 }
 
 fn close_rent_num(state: &mut MockState, req: &MockRequest) -> Value {
     let tzid = int(req, "tzid", 0);
-    if state.rents.remove(&tzid).is_none() {
-        return error("ERROR_WRONG_TZID");
+    let Some(rent) = state.rents.get(&tzid) else {
+        return error("ERROR_NO_OPERATIONS");
+    };
+    // `guard_interval` stands in for the backend's first 120 s, during which an unconfirmed rent without any
+    // SMS stays open.
+    if rent.status == 0 && rent.messages.is_empty() && state.options.guard_interval > 0 {
+        return error("NO_COMPLETE_TZID");
     }
+    // Unconfirmed (no SMS or only `notify`): removing it releases the reservation (`frozen()`). A confirmed
+    // rent closes without a refund.
+    state.rents.remove(&tzid);
     state.scheduled.remove(&tzid);
     json!({ "response": "1" })
 }
@@ -585,15 +621,16 @@ fn get_profile(state: &mut MockState, _req: &MockRequest) -> Value {
     })
 }
 
-/// `http://` or `https://` followed by a non-empty host.
-fn is_http_url(value: &str) -> bool {
-    let rest = value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"));
-    rest.and_then(|r| r.split(['/', '?', '#']).next())
-        .and_then(|authority| authority.rsplit('@').next())
-        .and_then(|host_port| host_port.split(':').next())
-        .is_some_and(|host| !host.is_empty() && !host.contains(char::is_whitespace))
+/// Any `scheme://…` URL, as the backend accepts: `[a-z][a-z0-9+.-]*://` then non-blank text.
+fn is_url(value: &str) -> bool {
+    let Some((scheme, rest)) = value.split_once("://") else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+        && !rest.is_empty()
+        && !rest.contains(char::is_whitespace)
 }
 
 fn profile(state: &mut MockState, req: &MockRequest) -> Value {
@@ -604,7 +641,7 @@ fn profile(state: &mut MockState, req: &MockRequest) -> Value {
     match profile.get("webhook_url") {
         None => {}
         Some(Value::Null) => state.webhook_url = None,
-        Some(Value::String(url)) if is_http_url(url) => state.webhook_url = Some(url.clone()),
+        Some(Value::String(url)) if is_url(url) => state.webhook_url = Some(url.clone()),
         Some(_) => {
             return json!({ "response": { "webhook_url": ["The webhook url must be a valid URL."] } });
         }
@@ -622,8 +659,10 @@ fn get_payment_history(_state: &mut MockState, req: &MockRequest) -> Value {
         "response": "1",
         "orders": paginate(Vec::new(), int(req, "page", 1), 10, "getPaymentHistory.php"),
         "paylist": [],
-        "domains": [],
+        "domains": ["onlinesim.io"],
+        "forms": { "1": "Card" },
         "currency": { "USD": 1 },
+        "buttons": { "USD": [5, 10, 20] },
     })
 }
 
@@ -637,13 +676,11 @@ struct FreeCountry {
     numbers: &'static [(&'static str, &'static [(&'static str, &'static str)])],
 }
 
+/// `ignore` of getFreeList: a note about prohibited services and their ids.
+const FREE_IGNORE: &str = "<p>Messages from these services are not shown:</p><p>1,2,3</p>";
+
+/// Country 44 first, like the backend's list.
 const FREE: &[FreeCountry] = &[
-    FreeCountry {
-        code: 7,
-        name: "russia",
-        text: "Russia",
-        numbers: &[("9001234567", &[("Telegram", "Telegram code: 51423")])],
-    },
     FreeCountry {
         code: 44,
         name: "united_kingdom",
@@ -655,6 +692,12 @@ const FREE: &[FreeCountry] = &[
                 ("Microsoft", "Microsoft access code: 2991"),
             ],
         )],
+    },
+    FreeCountry {
+        code: 7,
+        name: "russia",
+        text: "Russia",
+        numbers: &[("9001234567", &[("Telegram", "Telegram code: 51423")])],
     },
 ];
 
@@ -684,22 +727,21 @@ fn get_free_list(_state: &mut MockState, req: &MockRequest) -> Value {
         .map(|(i, (sender, text))| {
             json!({
                 "id": i + 1, "text": text, "in_number": sender, "my_number": number,
-                "created_at": stamp(i as i64), "data_humans": "1 day ago",
+                "created_at": iso(i as i64), "data_humans": "1 day ago",
                 "code": extract_code(text).unwrap_or_else(|| "-".into()),
             })
         })
         .collect();
-    let mut page = paginate(
-        messages,
-        int(req, "page", 1),
-        int(req, "count", 10),
-        "getFreeList",
-    );
+    let count = int(req, "count", 10).clamp(10, 500);
+    let mut page = paginate(messages, int(req, "page", 1), count, "getFreeList");
     page["number"] = json!(number);
     page["country"] = json!(country);
     let countries: Vec<Value> = FREE
         .iter()
         .map(|c| json!({ "country": c.code, "country_text": c.text, "country_original": c.name }))
         .collect();
-    json!({ "response": 1, "countries": countries, "numbers": numbers, "messages": page })
+    json!({
+        "response": 1, "countries": countries, "numbers": numbers, "messages": page,
+        "ignore": FREE_IGNORE, "content": null,
+    })
 }

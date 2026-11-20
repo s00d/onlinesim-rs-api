@@ -147,7 +147,7 @@ impl ClientBuilder {
 /// # async fn demo() -> onlinesim_rs_api::Result<()> {
 /// let client = onlinesim_rs_api::Client::new("your-api-key")?;
 /// let balance = client.user().balance().await?;
-/// println!("available: {} USD", balance.balance - balance.zbalance);
+/// println!("available: {} USD", balance.balance - balance.zbalance.max(0.0));
 /// # Ok(())
 /// # }
 /// ```

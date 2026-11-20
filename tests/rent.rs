@@ -124,3 +124,27 @@ async fn close_surfaces_no_close_rent_us() {
     let error = client.rent().close(1).await.unwrap_err();
     assert_eq!(error.code(), Some("NO_CLOSE_RENT_US"));
 }
+
+#[tokio::test]
+async fn decodes_sum_as_a_number_or_a_string_and_code_0_of_a_notify_sms() {
+    let mut item = state()["list"][0].clone();
+    item["status"] = json!(0);
+    item["checked"] = json!(false);
+    item["sum"] = json!(1.5);
+    item["messages"] = json!([
+        { "id": 2, "service": "notify", "text": "Messages from this sender are not accepted", "code": 0,
+          "created_at": "2026-11-19 10:01:12" },
+        { "id": 1, "service": "Google", "text": "G-070051", "code": "070051", "created_at": "2026-11-19 10:01:00" }
+    ]);
+    let mut listed = item.clone();
+    listed["sum"] = json!("2.40");
+    let (client, _) = client(vec![
+        ok(json!({ "response": 1, "item": item })),
+        ok(json!({ "response": 1, "list": [listed] })),
+    ]);
+    let rent = client.rent().get(7, 3, true).await.unwrap();
+    assert_eq!((rent.status, rent.checked, rent.sum), (0, Some(false), 1.5));
+    let codes: Vec<_> = rent.messages.iter().map(|m| m.code.as_str()).collect();
+    assert_eq!(codes, ["0", "070051"]); // the integer 0 is normalised to "0"
+    assert_eq!(client.rent().state_one(rent.tzid).await.unwrap().sum, 2.4);
+}

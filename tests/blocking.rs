@@ -222,6 +222,18 @@ fn wait_code_retries_transport_errors_and_raises_api_errors() {
     assert_eq!(code.unwrap(), "42");
     assert_eq!(clock.sleeps(), [5]);
 
+    let (client, _) = blocking(vec![
+        ok(json!({ "response": "TRY_AGAIN_LATER" })),
+        answer("43"),
+        ok(json!({ "response": 1 })),
+    ]);
+    let clock = FakeClock::new();
+    let code = client
+        .numbers()
+        .wait_code_with(7, WaitCodeOptions::default(), &clock);
+    assert_eq!(code.unwrap(), "43");
+    assert_eq!(clock.sleeps(), [5]);
+
     let (client, fake) = blocking(vec![ok(json!({ "response": "ERROR_NO_OPERATIONS" }))]);
     let error = client
         .numbers()

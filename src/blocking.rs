@@ -17,7 +17,7 @@ use crate::wire::{Call, Core, parse_response};
 /// # fn demo() -> onlinesim_rs_api::Result<()> {
 /// let client = onlinesim_rs_api::blocking::Client::new("your-api-key")?;
 /// let balance = client.user().balance()?;
-/// println!("available: {} USD", balance.balance - balance.zbalance);
+/// println!("available: {} USD", balance.balance - balance.zbalance.max(0.0));
 /// # Ok(())
 /// # }
 /// ```

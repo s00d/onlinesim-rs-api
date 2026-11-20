@@ -82,6 +82,22 @@ where
     }
 }
 
+/// Map from an object, or from a JSON array keyed by index (`"0"`, `"1"`, …): PHP sends a map whose keys
+/// are 0..n as an array. `[]` and `null` are an empty map.
+pub(crate) fn index_map<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<HashMap<String, Value>, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::Object(map) => map.into_iter().collect(),
+        Value::Array(items) => items
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| (i.to_string(), v))
+            .collect(),
+        _ => HashMap::new(),
+    })
+}
+
 /// Map of numbers (numbers or numeric strings); `[]` and `null` are an empty map.
 pub(crate) fn num_map<'de, D: Deserializer<'de>>(d: D) -> Result<HashMap<String, f64>, D::Error> {
     Ok(match Value::deserialize(d)? {

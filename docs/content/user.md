@@ -13,11 +13,11 @@ Balance in USD.
 async fn balance(&self) -> Result<Balance> // { balance: f64, zbalance: f64, income: Option<f64> }
 ```
 
-`balance` includes the sum frozen by numbers in progress (`zbalance`): available = `balance − zbalance`. `income` is the partner income. The server caches the answer for 60 s.
+`balance` includes the sum frozen by numbers and unconfirmed rents in progress (`zbalance`, which may be negative): available = `balance − max(zbalance, 0)`. `income` is the partner income. The server caches the answer for 60 s.
 
 ```rust
 let b = client.user().balance().await?;
-let available = b.balance - b.zbalance;
+let available = b.balance - b.zbalance.max(0.0);
 ```
 
 Errors: `ApiError` `ERROR_WRONG_KEY`, `ACCOUNT_BLOCKED`, `API_ACCESS_DISABLED`, `API_ACCESS_IP`.
@@ -30,7 +30,7 @@ The account profile.
 async fn profile(&self) -> Result<Profile>
 ```
 
-`Profile`: `{ id, name, username, email, locale, currency, number_country, number_reject, webhook_url, api_access, … }`; all but `id` are `Option`.
+`Profile`: `{ id, name, username, email, locale, currency, number_country, number_reject, webhook_url, api_access, number, country, … }`; all but `id` are `Option`. `number` is the phone number as digits (`Option<i64>`), `country` its country (`Option<String>`).
 
 ```rust
 let profile = client.user().profile().await?;
@@ -45,7 +45,7 @@ Top-up orders (paginated, newest first) and the available payment methods. Pages
 async fn payment_history(&self, page: u32) -> Result<PaymentHistory>
 ```
 
-`PaymentHistory`: `{ orders: Paginator<PaymentOrder>, paylist, domains, forms, currency, buttons }`. `PaymentOrder.sum` stays a decimal string (`"89.00"`); fields without a typed slot are in `PaymentOrder.extra`.
+`PaymentHistory`: `{ orders: Paginator<PaymentOrder>, paylist, domains, forms, currency, buttons }`. `PaymentOrder.sum` stays a decimal string (`"89.00"`); `currency` and `form_text` may be `None`; fields without a typed slot are in `PaymentOrder.extra`. `paylist` maps a group id to its payment methods; when the ids are 0, 1, 2… the server sends a JSON array, which is kept keyed `"0"`, `"1"`, ….
 
 ```rust
 let orders = client.user().payment_history(1).await?.orders;
