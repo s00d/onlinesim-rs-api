@@ -1,0 +1,710 @@
+# Changelog
+
+The full history is in [CHANGELOG.md](https://github.com/s00d/onlinesim-rs-api/blob/master/CHANGELOG.md){rel="&#x22;nofollow&#x22;"}.
+
+## 0.2.2
+
+- Fixed models against the current API: `Profile.number`/`country`, optional `Operation.response`, rent SMS `code` `"0"` for `notify` SMS, nullable free-list and payment fields; `payment_history().paylist` is kept when it arrives as a list.
+- `wait_code` retries `TRY_AGAIN_LATER` (rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`.
+- `MockOnlineSim` follows the backend more closely: rent reservation and confirmation, `setOperationRevise` and `closeRentNum` answers, missing vs wrong key — see [Testing](https://s00d.github.io/onlinesim-rs-api/testing).
+
+## 0.2.1
+
+- `MockOnlineSim`: an in-process fake of the API for your tests (feature `mock-transport`, no extra dependencies): `MockOnlineSim::new(options).client()` returns a normal client that never opens a socket; `transport()` for clients you build yourself. Helpers `add_sms`, `add_sms_after` (zero-interval `wait_code`), `fail_next` / `fail_next_on`, `fail_next_transport`, `set_balance` / `balance`, `operations`, `rents`, `requests`, `reset`. See [Testing](https://s00d.github.io/onlinesim-rs-api/testing).
+- Feature `mock` = `mock-transport` + `MockOnlineSim::start()`, the same fake over local HTTP. Its defaults now follow the shared mock spec (prices, numbers, key check, no automatic SMS).
+
+## 0.2.0
+
+A rewrite with a new API; 0.1 code does not compile unchanged.
+
+- One `ClientBuilder` for both clients; the async and blocking clients have the same sections and methods (`client.numbers()`, `client.rent()`, `client.user()`, `client.free()`).
+- The key is sent as a Bearer header, never in the URL. Default 30 s request timeout; the transport is injectable (your `reqwest` client or any `Transport`).
+- One error enum: `Error::Api(ApiError { code, message })` (`is_no_number()`), `Transport`, `Timeout`, `Decode`, `Config`. An HTTP 456 wrong key is an `ApiError`.
+- `numbers().wait_code(tzid, WaitCodeOptions { interval, timeout, keep_open, full_message, since })`: a simple per-call poller with `Duration`s, terminal states and transient-error retries; the shared batch poller is gone.
+- Methods take the country explicitly; booleans are sent as `1`/`0`, `orderby` lowercase, `reject` as a comma list.
+- `rent().get(country, days, extension)` sends `extension` explicitly.
+- New: `user().set_webhook_url` / `clear_webhook_url` / `webhook_logs`, `parse_webhook`, `parse_webhook_value`.
+- Removed: `numbers().repeat`, `service`, `service_number`, `rent().port_reload`, the old free endpoints (use `free().list`), client-side rate limiting, `oauth`, mock state files.
+- MSRV 1.85.
+
+
+# Free numbers
+
+## list
+
+Countries, the numbers of the selected country and the SMS of the selected number, in one call.
+
+```rust
+async fn list(&self, options: &FreeListOptions) -> Result<FreeList>
+```
+
+| `FreeListOptions` field | Type             | Default        | Description                                                     |
+| ----------------------- | ---------------- | -------------- | --------------------------------------------------------------- |
+| `country`               | `Option<u32>`    | `44` (server)  | Country code; an unknown one falls back to the first available. |
+| `number`                | `Option<String>` | first number   | Number **without** the country code, as the keys of `numbers`.  |
+| `page`                  | `Option<u32>`    | `1`            | Page of `messages`.                                             |
+| `count`                 | `Option<u32>`    | server default | SMS per page, 10–500.                                           |
+
+`FreeList`:
+
+- `countries`: `Vec<FreeCountry>` — `{ country, country_text, country_original }`
+- `numbers`: `HashMap<String, FreeNumber>` — `{ country, country_original, full_number, data_humans, is_archive }`, keyed by the short number
+- `messages`: `FreeMessages` — `page` (a paginator of `{ id, text, in_number, my_number, code, created_at, data_humans }`), `number` and `country`; `code` is `-` when no code was found
+
+```rust
+use onlinesim_rs_api::FreeListOptions;
+
+let uk = FreeListOptions { country: Some(44), ..FreeListOptions::default() };
+let list = client.free().list(&uk).await?;
+if let Some(short) = list.numbers.keys().next() {
+    let options = FreeListOptions { number: Some(short.clone()), count: Some(20), ..uk };
+    for sms in client.free().list(&options).await?.messages.page.data {
+        println!("{} {} {}", sms.in_number, sms.code, sms.text);
+    }
+}
+```
+
+
+# Numbers
+
+An operation (`tzid`) is one ordered number. Order it with `get`/`get_with_number`, read the SMS with `state_one` or `wait_code`, finish it with `close` (or `ban`). Countries are phone codes (`7`, `44`, …), services are slugs (`google`, `vkcom`, …) as returned by `tariffs`.
+
+Signatures below are the async ones; the blocking client has the same methods without `async`.
+
+## price
+
+Price of one number, USD; `None` when the country has no price for the service.
+
+```rust
+async fn price(&self, service: &str, country: u32) -> Result<Option<f64>>
+```
+
+| Param     | Type   | Description   |
+| --------- | ------ | ------------- |
+| `service` | `&str` | Service slug. |
+| `country` | `u32`  | Country code. |
+
+```rust
+let usd = client.numbers().price("google", 44).await?;
+```
+
+Errors: `ApiError` `ERROR_NO_SERVICE`, `UNDEFINED_COUNTRY`.
+
+## get
+
+Order a number; returns the operation id. Freezes the price on the balance.
+
+```rust
+async fn get(&self, service: &str, country: u32, reject: &[&str]) -> Result<i64>
+```
+
+| Param     | Type      | Description                                                             |
+| --------- | --------- | ----------------------------------------------------------------------- |
+| `service` | `&str`    | Service slug.                                                           |
+| `country` | `u32`     | Country code.                                                           |
+| `reject`  | `&[&str]` | Number prefixes to skip, e.g. `&["4470"]`; `&[]` uses the profile list. |
+
+```rust
+let tzid = client.numbers().get("google", 44, &["4470"]).await?;
+```
+
+Errors: `ApiError` with `is_no_number()`; `ApiError` `WARNING_LOW_BALANCE`, `ERROR_NO_SERVICE`, `UNDEFINED_COUNTRY`, `EXCEEDED_CONCURRENT_OPERATIONS`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `TRY_AGAIN_LATER`.
+
+## get_with_number
+
+Same as `get`, but returns the number right away.
+
+```rust
+async fn get_with_number(&self, service: &str, country: u32, reject: &[&str]) -> Result<NumberOrder>
+```
+
+`NumberOrder`: `{ tzid, number, country, time, service, title, guard_interval_remaining_seconds }` — `number` with `+`, `time` in seconds left.
+
+```rust
+let order = client.numbers().get_with_number("google", 44, &[]).await?;
+println!("{} {}", order.tzid, order.number);
+```
+
+Errors: as `get`.
+
+## state
+
+All operations of the account; empty when there are none.
+
+```rust
+async fn state(&self, options: StateOptions) -> Result<Vec<Operation>>
+```
+
+| `StateOptions` field | Type      | Default | Description                                          |
+| -------------------- | --------- | ------- | ---------------------------------------------------- |
+| `message_to_code`    | `bool`    | `true`  | `msg` is the code only; `false` — the full SMS text. |
+| `order_by`           | `OrderBy` | `Asc`   | Order of operations (`Asc`, `Desc`).                 |
+| `msg_list`           | `bool`    | `false` | `msg` is a list of all SMS (`OperationMsg::List`).   |
+
+`Operation`: `{ tzid, response, number, service, country, sum, time, msg, guard_interval_remaining_seconds, … }`.
+`response` is the state (`Option<OperationStatus>`, `None` when no number could be issued): `TzInpool` (number being assigned), `TzNumWait` (waiting for SMS), `TzNumAnswer` (SMS arrived), `TzOverOk` (finished), `ErrorNoItems` (failed). `msg` is `None` until the first SMS; `msg.as_text()` gives the code. The server caches answers for a few seconds.
+
+```rust
+use onlinesim_rs_api::{OrderBy, StateOptions};
+
+let options = StateOptions { order_by: OrderBy::Desc, ..StateOptions::default() };
+for op in client.numbers().state(options).await? {
+    println!("{} {:?} {:?}", op.tzid, op.response, op.msg);
+}
+```
+
+## state_one
+
+One operation.
+
+```rust
+async fn state_one(&self, tzid: i64, options: StateOneOptions) -> Result<Operation>
+```
+
+`StateOneOptions`: `message_to_code` (default `true`), `msg_list` (default `false`).
+
+```rust
+use onlinesim_rs_api::types::OperationStatus;
+
+let op = client.numbers().state_one(tzid, Default::default()).await?;
+if op.response == Some(OperationStatus::TzNumAnswer) {
+    println!("{:?}", op.msg.as_ref().and_then(|m| m.as_text()));
+}
+```
+
+Errors: `ApiError` `ERROR_NO_OPERATIONS` when the operation does not exist (any more).
+
+## wait_code
+
+Poll the operation until a code arrives, then close it and return the code.
+
+```rust
+async fn wait_code(&self, tzid: i64, options: WaitCodeOptions) -> Result<String>
+```
+
+| `WaitCodeOptions` field | Type             | Default | Description                                                          |
+| ----------------------- | ---------------- | ------- | -------------------------------------------------------------------- |
+| `interval`              | `Duration`       | 5 s     | Poll interval.                                                       |
+| `timeout`               | `Duration`       | 600 s   | Give up after.                                                       |
+| `keep_open`             | `bool`           | `false` | Call `next(tzid)` instead of `close(tzid)`, to wait for another SMS. |
+| `full_message`          | `bool`           | `false` | Return the full SMS text instead of the code.                        |
+| `since`                 | `Option<String>` | `None`  | Ignore this value (the previous code).                               |
+
+Transient errors are retried until the timeout: `Error::Transport`, and `ApiError` `TRY_AGAIN_LATER` (the HTTP 429 rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`. Any other `ApiError` is returned at once. The async version sleeps on tokio's clock (pause it in tests: `#[tokio::test(start_paused = true)]`); the blocking `wait_code_with(tzid, options, &clock)` takes any `Clock`.
+
+```rust
+use onlinesim_rs_api::WaitCodeOptions;
+
+let open = WaitCodeOptions { keep_open: true, ..WaitCodeOptions::default() };
+let first = client.numbers().wait_code(tzid, open).await?;
+let next = WaitCodeOptions { since: Some(first), ..WaitCodeOptions::default() };
+let second = client.numbers().wait_code(tzid, next).await?;
+```
+
+Errors: `Error::Timeout`; `ApiError` with code `TZ_OVER_OK` or `ERROR_NO_ITEMS` when the operation ended without a new code; any other `ApiError` from `state_one`/`close`/`next`.
+
+## next
+
+Switch the operation to its next SMS and keep it open (for services that send several SMS).
+
+```rust
+async fn next(&self, tzid: i64) -> Result<()>
+```
+
+```rust
+client.numbers().next(tzid).await?;
+```
+
+Errors: `ApiError` `ERROR_WRONG_TZID` (not an operation of your account), `ERROR_NO_TZID`.
+
+## close
+
+Finish the operation. An operation without SMS can be closed only after its guard interval (`guard_interval_remaining_seconds`); every attempt locks the tzid for 5 s.
+
+```rust
+async fn close(&self, tzid: i64) -> Result<()>
+```
+
+```rust
+client.numbers().close(tzid).await?;
+```
+
+Errors: `ApiError` `NO_COMPLETE_TZID`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `ERROR_WRONG_TZID`.
+
+## ban
+
+Finish the operation and report the number as bad. Only before any SMS arrived.
+
+```rust
+async fn ban(&self, tzid: i64) -> Result<()>
+```
+
+```rust
+client.numbers().ban(tzid).await?;
+```
+
+Errors: as `close`; `ApiError` with code `"0"` when the operation already has an SMS — nothing is changed then.
+
+## tariffs
+
+Services, prices and stock of every country, keyed by country code. No API key needed. The answer is large (a few MB); prefer `tariffs_one`.
+
+```rust
+async fn tariffs(&self) -> Result<HashMap<String, CountryStat>>
+```
+
+`CountryStat`: `{ name, locale_name, position, code, other, is_new, enabled, services }`; `services` maps `service_<slug>` to `ServiceStat { count, popular, code, price, id, service, slug }` (`count` is `None` when the stock is unknown).
+
+```rust
+let all = client.numbers().tariffs().await?;
+println!("{} countries", all.len());
+```
+
+## tariffs_one
+
+Services, prices and stock of one country.
+
+```rust
+async fn tariffs_one(&self, country: u32) -> Result<CountryStat>
+```
+
+```rust
+let uk = client.numbers().tariffs_one(44).await?;
+for s in uk.services.values() {
+    println!("{} {} {:?}", s.slug, s.price, s.count);
+}
+```
+
+Errors: `ApiError` `NO_COUNTRY`.
+
+
+# Rent
+
+A rent keeps a number for `days` days. Its SMS come in `RentItem.messages`, newest first.
+
+`get` reserves the price (it shows in `zbalance`): the rent starts with `status` `0` and `checked` `Some(false)` and waits up to 20 minutes for its first SMS. The first SMS that is not a `notify` notice confirms it (`status` `1`) and charges the price; without one the rent closes and the reservation is released. Some countries (`confirm` in `tariffs`, e.g. US numbers) are confirmed and charged at once.
+
+`RentItem`: `{ tzid, status, number, country, sum, days, hours, time, time_seconds, extension, extend, messages, start_time, stop_time, day_extend, … }` —
+`sum` is the cost in USD incl. extensions (`f64`; the server sends a number, or a decimal string in `state`), `time` minutes left, `time_seconds` seconds left,
+`extension` `0` not extendable / `1` extendable / `2` auto-extension, `extend` maps days to the extension price (empty when not extendable),
+`messages` is `Vec<RentSms>`: `{ id, service, text, code, created_at }` — `code` is empty when no code was found and `"0"` for a `notify` SMS (a prohibited sender; the server sends the integer `0`).
+
+## get
+
+Rent a number. The price is reserved; the first SMS charges it.
+
+```rust
+async fn get(&self, country: u32, days: u32, extension: bool) -> Result<RentItem>
+```
+
+| Param       | Type   | Description                                                                   |
+| ----------- | ------ | ----------------------------------------------------------------------------- |
+| `country`   | `u32`  | Country code.                                                                 |
+| `days`      | `u32`  | One of the tariff's `days` keys.                                              |
+| `extension` | `bool` | `true` is the server default; `false` makes the rent non-extendable for good. |
+
+```rust
+let rent = client.rent().get(7, 7, true).await?;
+println!("{} {} {}", rent.tzid, rent.number, rent.sum);
+```
+
+Errors: `ApiError` with `is_no_number()`; `ApiError` `UNDEFINED_DAYS`, `UNDEFINED_COUNTRY`, `WARNING_LOW_BALANCE`, `INTERVAL_CONCURRENT_REQUESTS_ERROR`, `TRY_AGAIN_LATER`.
+
+## state
+
+All rents of the account.
+
+```rust
+async fn state(&self) -> Result<Vec<RentItem>>
+```
+
+```rust
+for rent in client.rent().state().await? {
+    println!("{} {:?}", rent.number, rent.messages.first().map(|m| &m.code));
+}
+```
+
+## state_one
+
+One rent.
+
+```rust
+async fn state_one(&self, tzid: i64) -> Result<RentItem>
+```
+
+```rust
+let messages = client.rent().state_one(tzid).await?.messages;
+```
+
+Errors: `ApiError` `ERROR_NO_OPERATIONS` for an unknown tzid.
+
+## extend
+
+Extend a rent by `days` days and charge the balance at once. Only confirmed rents (`status` `1` or `4`) created with `extension: true`.
+
+```rust
+async fn extend(&self, tzid: i64, days: u32) -> Result<RentItem>
+```
+
+```rust
+let rent = client.rent().extend(tzid, 3).await?;
+println!("{}", rent.stop_time);
+```
+
+Errors: `ApiError` `TRY_AGAIN_LATER` (unknown tzid, not confirmed yet or closed, not extendable, unknown period, a repeat within 10 s), `WARNING_LOW_BALANCE`.
+
+## close
+
+Return the number before the period ends. A rent that is not confirmed yet (`status` `0`) and has no SMS can be closed only after 120 s; then, or with only `notify` SMS, the reservation is released. With a real SMS the rent is confirmed (charged) and closed. A confirmed rent closes without a refund. US numbers cannot be closed early.
+
+```rust
+async fn close(&self, tzid: i64) -> Result<()>
+```
+
+```rust
+client.rent().close(tzid).await?;
+```
+
+Errors: `ApiError` `ERROR_NO_OPERATIONS`, `NO_COMPLETE_TZID`, `NO_CLOSE_RENT_US`, `TRY_AGAIN_LATER`.
+
+## tariffs
+
+Rent prices of every country, keyed by country code. No API key needed.
+
+```rust
+async fn tariffs(&self) -> Result<HashMap<String, RentTariff>>
+```
+
+`RentTariff`: `{ code, name, enabled, is_new, position, extend, confirm, days, count, ext_counts }` — `days` maps rent days to the price in USD, `count` to the numbers available.
+
+```rust
+let tariffs = client.rent().tariffs().await?;
+```
+
+## tariffs_one
+
+Rent prices of one country.
+
+```rust
+async fn tariffs_one(&self, country: u32) -> Result<RentTariff>
+```
+
+```rust
+let days = client.rent().tariffs_one(7).await?.days;
+println!("{:?}", days.get("7")); // price of 7 days
+```
+
+Errors: `ApiError` `NO_COUNTRY` for a country without rent.
+
+
+# Testing
+
+`MockOnlineSim` is an in-process fake of the OnlineSim API that ships with the crate. It is a `Transport` and a `BlockingTransport` that answer like the real backend — same shapes, same error codes, HTTP 456 for a wrong key — and keep a balance, operations and rents. Your code talks to a normal `Client` (or `blocking::Client`), so nothing in it changes for tests. It is deterministic: no randomness, no clock; numbers and ids come from a counter.
+
+## Setup
+
+Enable the `mock-transport` feature for your tests. It adds no dependencies and works with the async client (default) and with `blocking`:
+
+```toml
+[dev-dependencies]
+onlinesim-rs-api = { version = "0.2.1", features = ["mock-transport"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+```rust
+use onlinesim_rs_api::mock::{MockOnlineSim, MockOptions};
+
+fn setup() -> onlinesim_rs_api::Result<()> {
+    let mock = MockOnlineSim::new(MockOptions { balance: 10.0, ..MockOptions::default() });
+    let client = mock.client()?; // a Client wired to the mock; `client_blocking()` for the blocking one
+    Ok(())
+}
+```
+
+```rust
+pub struct MockOptions {
+    pub api_key: String,          // default "mock-key"
+    pub balance: f64,             // USD, default 100
+    pub prices: MockPrices,       // BTreeMap<i64, BTreeMap<String, f64>>: country → service → USD
+    pub rent_tariffs: BTreeMap<i64, MockRentTariff>, // country → { days: BTreeMap<i64, f64>, extend: bool }
+    pub guard_interval: u64,      // seconds, default 0
+}
+```
+
+| Field            | Default                                                                         | Description                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `api_key`        | `"mock-key"`                                                                    | Key the mock accepts. `mock.client()` uses it.                                                                  |
+| `balance`        | `100.0`                                                                         | Starting balance, USD.                                                                                          |
+| `prices`         | `{7: {vkcom: 0.5, telegram: 1.2, google: 0.3}, 44: {google: 0.2, vkcom: 0.36}}` | Number prices; replaces the defaults. Also feeds `numbers().tariffs()`.                                         |
+| `rent_tariffs`   | `{7: {days: {1: 1.0, 3: 2.5, 7: 5.0}, extend: true}}`                           | Rent prices; `extend: false` makes rents of that country non-extendable.                                        |
+| `guard_interval` | `0`                                                                             | `> 0`: an operation without SMS, or an unconfirmed rent without any SMS, cannot be closed (`NO_COMPLETE_TZID`). |
+
+To build the client yourself (other options, a wrong key), pass `mock.transport()`; any base URL works:
+
+```rust
+use onlinesim_rs_api::Client;
+use onlinesim_rs_api::mock::MockOnlineSim;
+
+fn wrong_key() -> onlinesim_rs_api::Result<()> {
+    let mock = MockOnlineSim::default();
+    let client = Client::builder().api_key("wrong").build_with(mock.transport())?;
+    Ok(())
+}
+```
+
+`mock.builder()` returns a `ClientBuilder` with the mock's key and base URL already set.
+
+## A full example
+
+Order a number, let an SMS arrive while `wait_code` polls, check the code and the money. `add_sms_after` delivers the SMS after a number of polls instead of after some time, so `wait_code` runs with a zero interval and the test takes milliseconds.
+
+```rust
+use std::time::Duration;
+
+use onlinesim_rs_api::WaitCodeOptions;
+use onlinesim_rs_api::mock::{MockOnlineSim, MockOptions};
+use onlinesim_rs_api::types::OperationStatus;
+
+#[tokio::test]
+async fn receives_the_code() {
+    let mock = MockOnlineSim::new(MockOptions { balance: 10.0, ..MockOptions::default() });
+    let client = mock.client().unwrap();
+
+    let order = client.numbers().get_with_number("google", 44, &[]).await.unwrap();
+    assert_eq!(order.number, "+44900000001");
+
+    mock.add_sms_after(order.tzid, "Your Google code: 123-456", 2); // the third poll sees it
+    let options = WaitCodeOptions { interval: Duration::ZERO, ..WaitCodeOptions::default() };
+    let code = client.numbers().wait_code(order.tzid, options).await.unwrap();
+
+    assert_eq!(code, "123456");
+    assert_eq!(mock.operations()[0].status, OperationStatus::TzOverOk); // wait_code closed it
+    assert_eq!(mock.balance(), 9.8); // the price is spent once an SMS arrived
+}
+```
+
+The blocking client works the same way without any runtime: `mock.client_blocking()`, then `client.numbers().wait_code(tzid, options)` with `interval: Duration::ZERO`.
+
+The `msg` of an operation is the code by default: the first run of 4–8 digits, with spaces and dashes between digits removed (`123-456` → `123456`; the rule is public as `mock::extract_code`); a text without such a run comes back whole. `message_to_code: false` (or `full_message` in `wait_code`) gives the full text.
+
+## Errors
+
+`fail_next(code)` makes the next request answer `{"response": code}` — the client turns it into `Error::Api` (`is_no_number()` for `NO_NUMBER`) exactly as for the real server. `fail_next_on(endpoint, code)` fails only that endpoint. `fail_next_transport(status)` makes the next request fail with a non-JSON body and that HTTP status (`Error::Transport`); `fail_next_transport_on(endpoint, status)` for one endpoint.
+
+```rust
+use onlinesim_rs_api::Error;
+use onlinesim_rs_api::mock::MockOnlineSim;
+
+#[tokio::test]
+async fn handles_a_missing_number_and_a_network_hiccup() {
+    let mock = MockOnlineSim::default();
+    let client = mock.client().unwrap();
+
+    mock.fail_next_on("getNum.php", "NO_NUMBER");
+    assert!(client.numbers().get("google", 44, &[]).await.unwrap_err().is_no_number());
+
+    mock.fail_next_transport(503);
+    let error = client.user().balance().await.unwrap_err();
+    assert!(matches!(error, Error::Transport { status: Some(503), .. }));
+
+    assert_eq!(client.user().balance().await.unwrap().balance, 100.0); // one-shot
+}
+```
+
+The state itself produces the real error codes too: `WARNING_LOW_BALANCE` when the balance is short, `NO_NUMBER` when `reject` matches the next number, `UNDEFINED_COUNTRY` / `ERROR_NO_SERVICE` for unknown prices, `ERROR_WRONG_TZID` for an unknown or closed operation (`next` too; `ERROR_NO_TZID` for tzid `0`), `UNDEFINED_COUNTRY` / `UNDEFINED_DAYS` for an unknown rent country or period, `TRY_AGAIN_LATER` for every refused `rent().extend`, `ERROR_NO_OPERATIONS` for an unknown rent in `rent().close`, `ERROR_WRONG_KEY` for a wrong key (HTTP 456) or no key (HTTP 200).
+
+## Inspecting requests
+
+`mock.requests()` lists every request received: `MockRequest { method, path, query, body }`, `path` relative to `/api/`, `query` a `BTreeMap` (with `lang`), `body` the parsed JSON of a POST.
+
+```rust
+use onlinesim_rs_api::Method;
+use onlinesim_rs_api::mock::MockOnlineSim;
+
+#[tokio::test]
+async fn sends_reject_as_a_comma_list() {
+    let mock = MockOnlineSim::default();
+    mock.client().unwrap().numbers().get("google", 44, &["4470", "4471"]).await.unwrap();
+
+    let request = &mock.requests()[0];
+    assert_eq!((request.method, request.path.as_str()), (Method::Get, "getNum.php"));
+    assert_eq!(request.query["reject"], "4470,4471");
+    assert_eq!(request.body, None);
+}
+```
+
+## Control API
+
+| Member                                                                     | Description                                                                                                                                                                            |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MockOnlineSim::new(options)` / `default()`                                | An in-process mock.                                                                                                                                                                    |
+| `client()` / `client_blocking()`                                           | A normal `Client` / `blocking::Client` wired to the mock.                                                                                                                              |
+| `transport()`                                                              | The `MockTransport` (`Transport` + `BlockingTransport`, cheap to clone).                                                                                                               |
+| `builder()` / `base_url()`                                                 | A `ClientBuilder` with the mock's key and base URL / that base URL.                                                                                                                    |
+| `add_sms(tzid, text)` / `add_sms_from(tzid, text, service)`                | An SMS arrives now at a number operation or a rent (detected by `tzid`). Panics for an unknown or closed one.                                                                          |
+| `add_sms_after(tzid, text, polls)` / `add_sms_after_from(…, service)`      | The SMS arrives after `polls` state requests for `tzid` (`numbers().state`/`state_one`, `rent().state`/`state_one`).                                                                   |
+| `fail_next(code)` / `fail_next_on(endpoint, code)`                         | The next request (to `endpoint` only, e.g. `"getNum.php"`) answers `{"response": code}`.                                                                                               |
+| `fail_next_transport(status)` / `fail_next_transport_on(endpoint, status)` | The next request fails with a non-JSON body and that HTTP status.                                                                                                                      |
+| `set_balance(balance, zbalance)` / `balance()`                             | Set the total balance and an extra frozen part / read the total balance, USD (it includes the part frozen by open operations and unconfirmed rents, as `user().balance()` reports it). |
+| `operations()` / `rents()`                                                 | Copies of the current number operations / open rents, for assertions.                                                                                                                  |
+| `requests()`                                                               | Copies of the requests received.                                                                                                                                                       |
+| `webhook_url()`                                                            | The webhook URL last set through the profile.                                                                                                                                          |
+| `reset()`                                                                  | Back to the constructor's state.                                                                                                                                                       |
+
+`set_balance` takes two values because its 0.2.0 signature did; the other SDKs' `setBalance(n)` is `set_balance(n, 0.0)`. `script_sms` and `fail_no_number` from 0.2.0 still work; `add_sms_after` and `fail_next_on` replace them.
+
+## Over HTTP (feature `mock`)
+
+With the `mock` feature, `MockOnlineSim::start().await` (or `start_with(options)`) also serves the same state on a local port (wiremock, needs a tokio runtime), for code that builds its own HTTP client from a base URL. `base_url()` is then `http://127.0.0.1:<port>/api/`, and `client()` / `client_blocking()` go through real HTTP. All helpers above work the same.
+
+## What the mock does
+
+- **Numbers**: `get` freezes the price; `close` after an SMS spends it, `close` without one refunds it; `ban` after an SMS answers `"0"` (an `Error::Api` with code `0`), like the server. Numbers are `+<country>9000000NN`, ids count from 1. `next` switches to the following SMS. The operation's `time` stays at 1200 s — there is no clock.
+- **Rent**: `get` reserves the price (`status` `0`, `checked` `false`) and keeps the `extension` flag; the first SMS that is not `notify` confirms the rent (`status` `1`) and charges it — `add_sms_from(tzid, text, Some("notify"))` adds a notice with `code` `0` that confirms nothing. `extend` works on a confirmed rent and charges at once. `close` releases the reservation of an unconfirmed rent and gives no refund for a confirmed one. `sum` is a number in `get`/`extend` and a decimal string on the wire of `state`, like the server. SMS appear in `messages`, newest first. Rent numbers have no country code.
+- **User**: `balance` (frozen part included), a fixed profile, `set_webhook_url` accepts any `scheme://…` URL (`VALIDATION_ERROR` otherwise), `webhook_logs` lists the deliveries the mock *recorded* when an SMS arrived while a webhook URL was set — it makes no HTTP call; their `params` follow the real payload (`code` empty without a code, rent `number` in digits without `+`, rent `time_left` in minutes). `payment_history` has no orders.
+- **Free**: `free().list` returns two fixed countries (44 first) with one number and a few SMS each.
+- Not imitated: anything that needs real time — the 5 s lock after `setOperationOk` (`INTERVAL_CONCURRENT_REQUESTS_ERROR`), the 10 s lock of `rent().extend`, the 120 s before an unconfirmed rent may be closed and its 20-minute wait for the first SMS. `guard_interval > 0` stands in for "too early to close".
+
+
+# User
+
+## balance
+
+Balance in USD.
+
+```rust
+async fn balance(&self) -> Result<Balance> // { balance: f64, zbalance: f64, income: Option<f64> }
+```
+
+`balance` includes the sum frozen by numbers and unconfirmed rents in progress (`zbalance`, which may be negative): available = `balance − max(zbalance, 0)`. `income` is the partner income. The server caches the answer for 60 s.
+
+```rust
+let b = client.user().balance().await?;
+let available = b.balance - b.zbalance.max(0.0);
+```
+
+Errors: `ApiError` `ERROR_WRONG_KEY`, `ACCOUNT_BLOCKED`, `API_ACCESS_DISABLED`, `API_ACCESS_IP`.
+
+## profile
+
+The account profile.
+
+```rust
+async fn profile(&self) -> Result<Profile>
+```
+
+`Profile`: `{ id, name, username, email, locale, currency, number_country, number_reject, webhook_url, api_access, number, country, … }`; all but `id` are `Option`. `number` is the phone number as digits (`Option<i64>`), `country` its country (`Option<String>`).
+
+```rust
+let profile = client.user().profile().await?;
+println!("{:?} {:?}", profile.email, profile.webhook_url);
+```
+
+## payment_history
+
+Top-up orders (paginated, newest first) and the available payment methods. Pages start at 1.
+
+```rust
+async fn payment_history(&self, page: u32) -> Result<PaymentHistory>
+```
+
+`PaymentHistory`: `{ orders: Paginator<PaymentOrder>, paylist, domains, forms, currency, buttons }`. `PaymentOrder.sum` stays a decimal string (`"89.00"`); `currency` and `form_text` may be `None`; fields without a typed slot are in `PaymentOrder.extra`. `paylist` maps a group id to its payment methods; when the ids are 0, 1, 2… the server sends a JSON array, which is kept keyed `"0"`, `"1"`, ….
+
+```rust
+let orders = client.user().payment_history(1).await?.orders;
+println!("{} orders, page {}/{}", orders.total, orders.current_page, orders.last_page);
+```
+
+## set_webhook_url
+
+Set the URL that receives SMS webhooks (see [Webhooks](https://s00d.github.io/onlinesim-rs-api/webhooks)).
+
+```rust
+async fn set_webhook_url(&self, url: &str) -> Result<()>
+```
+
+```rust
+client.user().set_webhook_url("https://example.com/onlinesim-hook").await?;
+```
+
+Errors: `ApiError` `VALIDATION_ERROR` for an invalid URL; `message` holds the server's field messages.
+
+## clear_webhook_url
+
+Remove the webhook URL, also from operations in progress.
+
+```rust
+async fn clear_webhook_url(&self) -> Result<()>
+```
+
+```rust
+client.user().clear_webhook_url().await?;
+```
+
+## webhook_logs
+
+Webhook delivery log, newest first, 10 per page. Pages start at 1.
+
+```rust
+async fn webhook_logs(&self, page: u32) -> Result<Paginator<WebhookLog>>
+```
+
+`WebhookLog`: `{ id, user_id, webhook_url, kind, params, status, error, created_at, updated_at }` — `kind` (the server's `type`) is `receiving_sms` or `rent_sms`, `status` is `success`, `fail` or `pending`, `params` the payload that was sent (`serde_json::Value`; [`parse_webhook_value`](https://s00d.github.io/onlinesim-rs-api/webhooks) normalises it).
+
+```rust
+let logs = client.user().webhook_logs(1).await?;
+for log in &logs.data {
+    println!("{} {} {:?}", log.created_at, log.status, log.error);
+}
+```
+
+
+# Webhooks
+
+Set a URL with [`client.user().set_webhook_url`](https://s00d.github.io/onlinesim-rs-api/user#set_webhook_url). For each SMS the server POSTs a JSON body to it: `webhook_type` `receiving_sms` for numbers, `rent_sms` for rents. Delivery attempts are listed by [`client.user().webhook_logs`](https://s00d.github.io/onlinesim-rs-api/user#webhook_logs).
+
+Parsing needs no client: it works with `default-features = false`.
+
+## parse_webhook
+
+Parse an inbound webhook body from its JSON text; `parse_webhook_value` takes an already parsed `serde_json::Value`.
+
+```rust
+fn parse_webhook(body: &str) -> Result<WebhookPayload>
+fn parse_webhook_value(value: &serde_json::Value) -> Result<WebhookPayload>
+```
+
+Lenient: numeric fields may arrive as strings, missing or malformed fields become `None`, unknown fields are dropped. It fails (`Error::Decode`) only when the body is not a JSON object.
+
+```rust
+use onlinesim_rs_api::parse_webhook;
+use onlinesim_rs_api::types::WebhookType;
+
+// In your HTTP handler, with the request body as text:
+fn on_webhook(body: &str) -> onlinesim_rs_api::Result<()> {
+    let hook = parse_webhook(body)?;
+    if hook.webhook_type == Some(WebhookType::ReceivingSms) {
+        println!("{:?} {:?}", hook.operation_id, hook.code);
+    }
+    Ok(()) // answer HTTP 200
+}
+
+fn main() {
+    on_webhook(r#"{"webhook_type":"receiving_sms","operation_id":"1520","code":"195895"}"#).unwrap();
+}
+```
+
+## Payload fields
+
+| Field          | Type                  | Description                                                                                                                  |
+| -------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `webhook_type` | `Option<WebhookType>` | `ReceivingSms` or `RentSms`; `None` for anything else.                                                                       |
+| `operation_id` | `Option<i64>`         | `tzid` of the operation or rent.                                                                                             |
+| `user_id`      | `Option<i64>`         | Account id.                                                                                                                  |
+| `country_code` | `Option<i64>`         | Country code of the number.                                                                                                  |
+| `number`       | `Option<String>`      | Numbers: `+` and the full number (`+79001234567`), or `hidden`. Rent: the full number in digits without `+` (`79001234567`). |
+| `sender`       | `Option<String>`      | Sender of the SMS, e.g. `VK`.                                                                                                |
+| `message`      | `Option<String>`      | Full SMS text.                                                                                                               |
+| `code`         | `Option<String>`      | Code extracted from the SMS; empty when none was found.                                                                      |
+| `time_start`   | `Option<String>`      | Numbers: when the operation was ordered. Rent: when the SMS arrived. `YYYY-MM-DD HH:MM:SS`.                                  |
+| `time_left`    | `Option<i64>`         | Time left: seconds for numbers, minutes for rent.                                                                            |
