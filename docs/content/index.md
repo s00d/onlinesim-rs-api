@@ -34,7 +34,7 @@ async fn main() -> onlinesim_rs_api::Result<()> {
     let client = Client::new(std::env::var("ONLINESIM_KEY").unwrap_or_default())?;
 
     let balance = client.user().balance().await?;
-    println!("available: {} USD", balance.balance - balance.zbalance);
+    println!("available: {} USD", balance.balance - balance.zbalance.max(0.0));
 
     let order = client.numbers().get_with_number("google", 44, &[]).await?;
     println!("enter {} in the app", order.number);
@@ -73,7 +73,7 @@ Finish with `build()` (async, default `reqwest::Client`), `build_with(transport)
 
 Sections: [`client.numbers()`](/numbers), [`client.rent()`](/rent), [`client.user()`](/user), [`client.free()`](/free). Webhook bodies are parsed by the standalone [`parse_webhook`](/webhooks).
 
-Returned structs keep the server's snake_case field names. Money that the server sends as a decimal string (`balance`, rent `sum`) becomes `f64`, numbers sent as strings are parsed, and maps that arrive as an empty PHP array `[]` become empty maps.
+Returned structs keep the server's snake_case field names. Money that the server sends as a decimal string (`balance`, rent `sum` in `rent().state`) becomes `f64`, numbers sent as strings are parsed, and maps that arrive as an empty PHP array `[]` become empty maps. `payment_history().paylist` arrives as a JSON array when its ids are 0, 1, 2…; it is kept, keyed `"0"`, `"1"`, ….
 
 ## Error handling
 
@@ -81,7 +81,7 @@ Every call returns `onlinesim_rs_api::Result<T>`; the error is the enum `Error`.
 
 | Variant | When | Data |
 |---|---|---|
-| `Error::Api(ApiError)` | The API answered with an error code (also a wrong key, HTTP 456). `is_no_number()` for `NO_NUMBER` / `NO_NUMBER_FOR_FORWARD`. | `code`, `message` |
+| `Error::Api(ApiError)` | The API answered with an error code (also a wrong key, HTTP 456, and the rate limit, HTTP 429 `TRY_AGAIN_LATER`). `is_no_number()` for `NO_NUMBER`. | `code`, `message` |
 | `Error::Transport` | Network error, request timeout, an HTTP error without an API code, or a body that is not JSON. | `message`, `status` (`None` without a response), `body` (first 500 chars) |
 | `Error::Timeout` | `wait_code` got no code within its `timeout`. | message |
 | `Error::Decode` | The JSON does not have the expected shape. | message |

@@ -18,7 +18,7 @@
 //!
 //! let client = Client::new("your-api-key")?;
 //! let balance = client.user().balance().await?;
-//! println!("available: {} USD", balance.balance - balance.zbalance);
+//! println!("available: {} USD", balance.balance - balance.zbalance.max(0.0));
 //!
 //! let order = client.numbers().get_with_number("google", 44, &[]).await?;
 //! println!("enter {} in the app", order.number);

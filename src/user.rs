@@ -11,7 +11,7 @@ use crate::wire::{Call, Request, decode};
 pub struct User<'a, C>(pub(crate) &'a C);
 
 section_methods!(User {
-    /// Balance in USD. `balance` includes the frozen `zbalance`: available = balance − zbalance.
+    /// Balance in USD. `balance` includes the frozen `zbalance`: available = balance − max(zbalance, 0).
     fn balance() -> Balance;
 
     /// Account profile.

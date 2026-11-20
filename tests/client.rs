@@ -82,7 +82,7 @@ fn rejects_a_bad_base_url() {
 async fn maps_no_number_to_an_api_error_with_is_no_number() {
     let (client, _) = client(vec![
         ok(json!({ "response": "NO_NUMBER" })),
-        ok(json!({ "response": "NO_NUMBER_FOR_FORWARD" })),
+        ok(json!({ "response": "FORWARD_NOT_SUPPORTED" })),
     ]);
     let error = client.numbers().get("google", 44, &[]).await.unwrap_err();
     assert!(error.is_no_number());
@@ -94,8 +94,39 @@ async fn maps_no_number_to_an_api_error_with_is_no_number() {
         api.message,
         "No numbers available for this service right now"
     );
+    // Only NO_NUMBER is "no number"; forwarding answers FORWARD_NOT_SUPPORTED now.
     let error = client.numbers().get("google", 7, &[]).await.unwrap_err();
-    assert!(error.is_no_number());
+    assert!(!error.is_no_number());
+    assert_eq!(error.code(), Some("FORWARD_NOT_SUPPORTED"));
+}
+
+#[tokio::test]
+async fn maps_http_429_try_again_later_to_api_error_not_transport() {
+    let (client, _) = client(vec![Reply::Json(
+        429,
+        json!({ "response": "TRY_AGAIN_LATER" }),
+    )]);
+    let error = client
+        .numbers()
+        .state(Default::default())
+        .await
+        .unwrap_err();
+    let Error::Api(api) = error else {
+        panic!("{error:?}")
+    };
+    assert_eq!(api.code, "TRY_AGAIN_LATER");
+}
+
+#[tokio::test]
+async fn maps_a_missing_key_http_200_wrong_key_to_api_error() {
+    let fake = Fake::new(vec![ok(json!({ "response": "ERROR_WRONG_KEY" }))]);
+    let client = Client::builder().build_with(fake.clone()).unwrap();
+    let error = client.user().balance().await.unwrap_err();
+    assert_eq!(error.code(), Some("ERROR_WRONG_KEY"));
+    assert_eq!(
+        error.to_string(),
+        "Wrong or missing API key (ERROR_WRONG_KEY)"
+    );
 }
 
 #[tokio::test]
@@ -109,7 +140,7 @@ async fn maps_http_456_wrong_key_to_api_error_body_before_status() {
         panic!("{error:?}")
     };
     assert_eq!(api.code, "ERROR_WRONG_KEY");
-    assert_eq!(api.message, "Wrong API key");
+    assert_eq!(api.message, "Wrong or missing API key");
     assert!(!api.is_no_number());
 }
 

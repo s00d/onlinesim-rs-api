@@ -1,6 +1,7 @@
 //! A fake OnlineSim API for your own tests: no network, key, money or clock.
 //!
 //! [`MockOnlineSim`] answers every endpoint the SDK calls like the real backend (HTTP 456 for a wrong key,
+//! HTTP 200 `ERROR_WRONG_KEY` for a missing one,
 //! string/int `response`, decimal-string money, `[]` for empty maps) and keeps a balance, operations and
 //! rents. It is a [`Transport`](crate::Transport) and a [`BlockingTransport`](crate::BlockingTransport)
 //! ([`MockOnlineSim::transport`]), so `client()` / `client_blocking()` give normal clients that never open
@@ -27,7 +28,10 @@
 //! ```
 //!
 //! Deterministic: ids and numbers come from a counter (`+44900000001`, tzid 1, …), timestamps from a fixed
-//! epoch. Not imitated: the server's 5 s lock after `setOperationOk` and anything else that needs real time.
+//! epoch. Rents are reserved by getRentNum and charged by their first SMS that is not `notify`. Not imitated:
+//! anything that needs real time (the 5 s lock after `setOperationOk`, the 10 s lock of `extendRentState`,
+//! the 120 s before an unconfirmed rent may be closed, its 20-minute wait for the first SMS);
+//! `guard_interval > 0` stands in for "too early to close".
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -65,7 +69,8 @@ impl Shared {
         f(&mut guard)
     }
 
-    /// Answer one request: log → queued failure → unknown path 404 → wrong key 456 → handler.
+    /// Answer one request: log → queued failure → unknown path 404 → wrong key 456 / missing key 200 →
+    /// handler.
     fn dispatch(&self, request: MockRequest, authorization: Option<&str>) -> HttpResponse {
         self.with(|state| {
             state.requests.push(request.clone());
@@ -78,11 +83,16 @@ impl Shared {
             let Some(handler) = handlers::route(&request.path) else {
                 return html(404, "Not Found");
             };
+            // A wrong key is HTTP 456 (public endpoints check a sent key too); no key at all is HTTP 200.
             let expected = format!("Bearer {}", state.options.api_key);
-            if !handlers::PUBLIC_PATHS.contains(&request.path.as_str())
-                && authorization != Some(expected.as_str())
-            {
-                return reply(456, &json!({ "response": "ERROR_WRONG_KEY" }));
+            match authorization {
+                Some(auth) if auth != expected => {
+                    return reply(456, &json!({ "response": "ERROR_WRONG_KEY" }));
+                }
+                None if !handlers::PUBLIC_PATHS.contains(&request.path.as_str()) => {
+                    return reply(200, &json!({ "response": "ERROR_WRONG_KEY" }));
+                }
+                _ => {}
             }
             reply(200, &handler(state, &request))
         })
@@ -257,7 +267,8 @@ impl MockOnlineSim {
     }
 
     /// An SMS arrives now at number operation or rent `tzid` (detected by the id). `service` defaults to
-    /// the operation's service (`other` for rents).
+    /// the operation's service (`other` for rents). The first rent SMS whose service is not `notify`
+    /// confirms the rent and charges its price; a `notify` SMS gets `code` `0` and confirms nothing.
     ///
     /// # Panics
     ///
@@ -331,7 +342,7 @@ impl MockOnlineSim {
     }
 
     /// Set the total balance and an extra frozen part, USD (`getBalance` reports `balance` and, as
-    /// `zbalance`, `zbalance` plus the prices frozen by open operations). Usually `set_balance(10.0, 0.0)`.
+    /// `zbalance`, `zbalance` plus the prices frozen by open operations and unconfirmed rents). Usually `set_balance(10.0, 0.0)`.
     pub fn set_balance(&self, balance: f64, zbalance: f64) {
         self.shared.with(|s| {
             s.balance = to_mills(balance);
@@ -339,7 +350,8 @@ impl MockOnlineSim {
         });
     }
 
-    /// Total balance, USD, including the part frozen by open operations (as `getBalance` reports it).
+    /// Total balance, USD, including the part frozen by open operations and unconfirmed rents (as
+    /// `getBalance` reports it).
     pub fn balance(&self) -> f64 {
         self.shared.with(|s| from_mills(s.balance))
     }

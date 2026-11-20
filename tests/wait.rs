@@ -147,7 +147,56 @@ async fn retries_a_transient_transport_error() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn raises_any_api_error_at_once() {
+async fn retries_transient_api_errors_until_the_code_arrives() {
+    for code in [
+        "TRY_AGAIN_LATER",
+        "ERROR_UNDEFINED",
+        "INTERVAL_CONCURRENT_REQUESTS_ERROR",
+    ] {
+        let start = Instant::now();
+        let (client, fake) = client(vec![
+            Reply::Json(429, json!({ "response": code })),
+            answer("42"),
+            closed(),
+        ]);
+        let got = client
+            .numbers()
+            .wait_code(7, WaitCodeOptions::default())
+            .await;
+        assert_eq!(got.unwrap(), "42", "{code}");
+        assert_eq!(start.elapsed(), Duration::from_secs(5));
+        assert_eq!(fake.calls().len(), 3);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retryable_api_error_still_ends_in_timeout_at_the_deadline() {
+    let replies = (0..10)
+        .map(|_| ok(json!({ "response": "TRY_AGAIN_LATER" })))
+        .collect();
+    let (client, fake) = client(replies);
+    let options = WaitCodeOptions {
+        interval: Duration::from_secs(5),
+        timeout: Duration::from_secs(10),
+        ..WaitCodeOptions::default()
+    };
+    let error = client.numbers().wait_code(7, options).await.unwrap_err();
+    assert!(matches!(error, Error::Timeout(_)), "{error:?}");
+    assert_eq!(fake.calls().len(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_operation_without_response_keeps_polling() {
+    let (client, _) = client(vec![ok(json!([{ "tzid": 7 }])), answer("77"), closed()]);
+    let got = client
+        .numbers()
+        .wait_code(7, WaitCodeOptions::default())
+        .await;
+    assert_eq!(got.unwrap(), "77");
+}
+
+#[tokio::test(start_paused = true)]
+async fn raises_any_other_api_error_at_once() {
     let (client, fake) = client(vec![ok(json!({ "response": "ERROR_NO_OPERATIONS" }))]);
     let error = client
         .numbers()

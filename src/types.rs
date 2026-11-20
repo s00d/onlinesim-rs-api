@@ -96,8 +96,9 @@ fn opt_msg<'de, D: Deserializer<'de>>(d: D) -> Result<Option<OperationMsg>, D::E
 pub struct Operation {
     /// Operation id.
     pub tzid: i64,
-    /// State.
-    pub response: OperationStatus,
+    /// State; `None` when no number could be issued.
+    #[serde(default)]
+    pub response: Option<OperationStatus>,
     /// Number with `+`.
     #[serde(default, deserialize_with = "de::opt_text")]
     pub number: Option<String>,
@@ -231,7 +232,8 @@ pub struct RentSms {
     /// Full text.
     #[serde(default, deserialize_with = "de::text0")]
     pub text: String,
-    /// Extracted code.
+    /// Extracted code, empty when none. A `notify` SMS (a prohibited sender) has the integer `0` on the wire,
+    /// normalised to `"0"`.
     #[serde(default, deserialize_with = "de::text0")]
     pub code: String,
     /// Arrival time.
@@ -244,7 +246,7 @@ pub struct RentSms {
 pub struct RentItem {
     /// Operation id.
     pub tzid: i64,
-    /// Status.
+    /// `0`: price reserved, waiting for the first SMS; `1`: confirmed and charged.
     #[serde(default, deserialize_with = "de::int0")]
     pub status: i64,
     /// Number.
@@ -253,7 +255,8 @@ pub struct RentItem {
     /// Country code.
     #[serde(default, deserialize_with = "de::int0")]
     pub country: i64,
-    /// Price paid, USD (parsed from the server's decimal string).
+    /// Cost incl. extensions, USD (the server sends a number, or a decimal string in getRentState). Reserved
+    /// while `status` is 0, charged once the rent is confirmed.
     #[serde(default, deserialize_with = "de::money")]
     pub sum: f64,
     /// Rent days.
@@ -355,10 +358,10 @@ pub struct RentTariff {
 /// Account balance, USD.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Balance {
-    /// Total balance. Includes `zbalance`: available = balance − zbalance.
+    /// Total balance. Includes `zbalance`: available = balance − max(zbalance, 0).
     #[serde(default, deserialize_with = "de::money")]
     pub balance: f64,
-    /// Sum frozen by numbers in progress.
+    /// Sum frozen by numbers and unconfirmed rents in progress; may be negative.
     #[serde(default, deserialize_with = "de::money")]
     pub zbalance: f64,
     /// Partner income.
@@ -411,12 +414,12 @@ pub struct Profile {
     /// Webhook URL.
     #[serde(default)]
     pub webhook_url: Option<String>,
-    /// Phone number.
-    #[serde(default, deserialize_with = "de::opt_text")]
-    pub number: Option<String>,
-    /// Phone country.
+    /// Phone number (digits).
     #[serde(default, deserialize_with = "de::opt_int")]
-    pub country: Option<i64>,
+    pub number: Option<i64>,
+    /// Phone country.
+    #[serde(default, deserialize_with = "de::opt_text")]
+    pub country: Option<String>,
     /// Phone region.
     #[serde(default, deserialize_with = "de::opt_int")]
     pub number_region: Option<i64>,
@@ -529,7 +532,7 @@ pub struct PaymentOrder {
     pub sum: String,
     /// Currency.
     #[serde(default)]
-    pub currency: String,
+    pub currency: Option<String>,
     /// Status code.
     #[serde(default, deserialize_with = "de::int0")]
     pub stat: i64,
@@ -553,8 +556,9 @@ pub struct PaymentHistory {
     /// Orders, newest first.
     #[serde(default)]
     pub orders: Paginator<PaymentOrder>,
-    /// Payment methods by list id.
-    #[serde(default, deserialize_with = "de::map")]
+    /// Payment methods by group id. The server sends a JSON array when the ids are 0..n; it is kept, keyed
+    /// `"0"`, `"1"`, ….
+    #[serde(default, deserialize_with = "de::index_map")]
     pub paylist: HashMap<String, Value>,
     /// Payment domains.
     #[serde(default, deserialize_with = "de::list")]
@@ -621,10 +625,10 @@ pub struct FreeCountry {
     pub country: i64,
     /// Localised name.
     #[serde(default)]
-    pub country_text: String,
+    pub country_text: Option<String>,
     /// Name.
     #[serde(default)]
-    pub country_original: String,
+    pub country_original: Option<String>,
 }
 
 /// A free number.
@@ -635,7 +639,7 @@ pub struct FreeNumber {
     pub country: i64,
     /// Country name.
     #[serde(default)]
-    pub country_original: String,
+    pub country_original: Option<String>,
     /// Number with the country code, no `+`.
     #[serde(default, deserialize_with = "de::text0")]
     pub full_number: String,

@@ -10,6 +10,13 @@ use crate::error::{ApiError, Error, Result};
 use crate::numbers::{Numbers, StateOneOptions};
 use crate::types::{Operation, OperationStatus};
 
+/// Error codes that mean "try again": the rate limit (HTTP 429), a transient server error, too many requests.
+const RETRYABLE: &[&str] = &[
+    "TRY_AGAIN_LATER",
+    "ERROR_UNDEFINED",
+    "INTERVAL_CONCURRENT_REQUESTS_ERROR",
+];
+
 /// Options of `numbers().wait_code`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaitCodeOptions {
@@ -98,15 +105,15 @@ impl<'a> Poller<'a> {
                 if let Some(code) = code {
                     return Next::Code(code.to_string());
                 }
-                if matches!(
-                    op.response,
-                    OperationStatus::TzOverOk | OperationStatus::ErrorNoItems
-                ) {
-                    return Next::Fail(ApiError::new(op.response.as_str(), None).into());
+                if let Some(status @ (OperationStatus::TzOverOk | OperationStatus::ErrorNoItems)) =
+                    op.response
+                {
+                    return Next::Fail(ApiError::new(status.as_str(), None).into());
                 }
             }
             // Transient: retried until the timeout.
             Err(Error::Transport { .. }) => {}
+            Err(Error::Api(e)) if RETRYABLE.contains(&e.code.as_str()) => {}
             Err(e) => return Next::Fail(e),
         }
         match self.options.timeout.checked_sub(elapsed) {
@@ -125,8 +132,10 @@ impl Numbers<'_, crate::Client> {
     /// (`next` with `keep_open`) and return the code.
     ///
     /// A finished operation (`TZ_OVER_OK`, `ERROR_NO_ITEMS`) without a new code is an `ApiError` with that
-    /// state as the code; running out of `timeout` is [`Error::Timeout`]. [`Error::Transport`] is retried
-    /// until the timeout; any `ApiError` is returned at once. Sleeps on tokio's clock.
+    /// state as the code; running out of `timeout` is [`Error::Timeout`]. [`Error::Transport`] and the
+    /// transient `ApiError` codes `TRY_AGAIN_LATER` (HTTP 429), `ERROR_UNDEFINED` and
+    /// `INTERVAL_CONCURRENT_REQUESTS_ERROR` are retried until the timeout; any other `ApiError` is returned
+    /// at once. Sleeps on tokio's clock.
     pub async fn wait_code(&self, tzid: i64, options: WaitCodeOptions) -> Result<String> {
         let poller = Poller::new(tzid, &options);
         let start = tokio::time::Instant::now();
@@ -159,8 +168,10 @@ impl Numbers<'_, crate::blocking::Client> {
     /// (`next` with `keep_open`) and return the code. Time comes from `clock` (a fake one in tests).
     ///
     /// A finished operation (`TZ_OVER_OK`, `ERROR_NO_ITEMS`) without a new code is an `ApiError` with that
-    /// state as the code; running out of `timeout` is [`Error::Timeout`]. [`Error::Transport`] is retried
-    /// until the timeout; any `ApiError` is returned at once.
+    /// state as the code; running out of `timeout` is [`Error::Timeout`]. [`Error::Transport`] and the
+    /// transient `ApiError` codes `TRY_AGAIN_LATER` (HTTP 429), `ERROR_UNDEFINED` and
+    /// `INTERVAL_CONCURRENT_REQUESTS_ERROR` are retried until the timeout; any other `ApiError` is returned
+    /// at once.
     pub fn wait_code_with(
         &self,
         tzid: i64,

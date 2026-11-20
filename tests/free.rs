@@ -44,3 +44,22 @@ async fn list_normalises_empty_numbers() {
     assert!(list.numbers.is_empty());
     assert!(fake.last().query().is_empty());
 }
+
+#[tokio::test]
+async fn list_accepts_null_country_names() {
+    let (client, _) = client(vec![ok(json!({
+        "response": 1,
+        "countries": [{ "country": 999, "country_text": null, "country_original": null }],
+        "numbers": { "123": { "country": 999, "country_original": null, "full_number": "999123" } },
+        "messages": { "data": [] }
+    }))]);
+    let list = client
+        .free()
+        .list(&FreeListOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(list.countries[0].country, 999);
+    assert_eq!(list.countries[0].country_text, None);
+    assert_eq!(list.countries[0].country_original, None);
+    assert_eq!(list.numbers["123"].country_original, None);
+}

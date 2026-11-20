@@ -80,7 +80,7 @@ async fn state(&self, options: StateOptions) -> Result<Vec<Operation>>
 | `msg_list` | `bool` | `false` | `msg` is a list of all SMS (`OperationMsg::List`). |
 
 `Operation`: `{ tzid, response, number, service, country, sum, time, msg, guard_interval_remaining_seconds, … }`.
-`response` is the state (`OperationStatus`): `TzInpool` (number being assigned), `TzNumWait` (waiting for SMS), `TzNumAnswer` (SMS arrived), `TzOverOk` (finished), `ErrorNoItems` (failed). `msg` is `None` until the first SMS; `msg.as_text()` gives the code. The server caches answers for a few seconds.
+`response` is the state (`Option<OperationStatus>`, `None` when no number could be issued): `TzInpool` (number being assigned), `TzNumWait` (waiting for SMS), `TzNumAnswer` (SMS arrived), `TzOverOk` (finished), `ErrorNoItems` (failed). `msg` is `None` until the first SMS; `msg.as_text()` gives the code. The server caches answers for a few seconds.
 
 ```rust
 use onlinesim_rs_api::{OrderBy, StateOptions};
@@ -105,7 +105,7 @@ async fn state_one(&self, tzid: i64, options: StateOneOptions) -> Result<Operati
 use onlinesim_rs_api::types::OperationStatus;
 
 let op = client.numbers().state_one(tzid, Default::default()).await?;
-if op.response == OperationStatus::TzNumAnswer {
+if op.response == Some(OperationStatus::TzNumAnswer) {
     println!("{:?}", op.msg.as_ref().and_then(|m| m.as_text()));
 }
 ```
@@ -128,7 +128,7 @@ async fn wait_code(&self, tzid: i64, options: WaitCodeOptions) -> Result<String>
 | `full_message` | `bool` | `false` | Return the full SMS text instead of the code. |
 | `since` | `Option<String>` | `None` | Ignore this value (the previous code). |
 
-A transient `Error::Transport` is retried until the timeout; any `ApiError` is returned at once. The async version sleeps on tokio's clock (pause it in tests: `#[tokio::test(start_paused = true)]`); the blocking `wait_code_with(tzid, options, &clock)` takes any `Clock`.
+Transient errors are retried until the timeout: `Error::Transport`, and `ApiError` `TRY_AGAIN_LATER` (the HTTP 429 rate limit), `ERROR_UNDEFINED` and `INTERVAL_CONCURRENT_REQUESTS_ERROR`. Any other `ApiError` is returned at once. The async version sleeps on tokio's clock (pause it in tests: `#[tokio::test(start_paused = true)]`); the blocking `wait_code_with(tzid, options, &clock)` takes any `Clock`.
 
 ```rust
 use onlinesim_rs_api::WaitCodeOptions;
@@ -152,6 +152,8 @@ async fn next(&self, tzid: i64) -> Result<()>
 ```rust
 client.numbers().next(tzid).await?;
 ```
+
+Errors: `ApiError` `ERROR_WRONG_TZID` (not an operation of your account), `ERROR_NO_TZID`.
 
 ## close
 
@@ -179,7 +181,7 @@ async fn ban(&self, tzid: i64) -> Result<()>
 client.numbers().ban(tzid).await?;
 ```
 
-Errors: as `close`.
+Errors: as `close`; `ApiError` with code `"0"` when the operation already has an SMS — nothing is changed then.
 
 ## tariffs
 
